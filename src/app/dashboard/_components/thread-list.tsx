@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { api } from "~/trpc/react";
 import { formatDistanceToNow } from "date-fns";
@@ -39,18 +39,25 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
   );
 
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  const intersection = useIntersection(loadMoreRef, {
+  
+  const intersectionOptions = useMemo(() => ({
     root: parentRef.current,
-    rootMargin: "100px",
-  });
+    rootMargin: "50px",
+  }), [parentRef.current]);
+  
+  const allThreads = data?.pages.flatMap((page) => page.threads) ?? [];
+  
+  const intersection = useIntersection(loadMoreRef, intersectionOptions);
 
   useEffect(() => {
-    if (intersection?.isIntersecting && hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage();
+    if (intersection?.isIntersecting && hasNextPage && !isFetchingNextPage && allThreads.length > 0) {
+      const timer = setTimeout(() => {
+        void fetchNextPage();
+      }, 100);
+      
+      return () => clearTimeout(timer);
     }
-  }, [intersection?.isIntersecting, hasNextPage, isFetchingNextPage, fetchNextPage]);
-
-  const allThreads = data?.pages.flatMap((page) => page.threads) ?? [];
+  }, [intersection?.isIntersecting, hasNextPage, isFetchingNextPage, fetchNextPage, allThreads.length]);
 
   const rowVirtualizer = useVirtualizer({
     count: allThreads.length,
@@ -285,10 +292,15 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
             </Link>
           );
         })}
-        </div>
-
+        
         {hasNextPage && (
-          <div ref={loadMoreRef} className="p-4 text-center">
+          <div 
+            ref={loadMoreRef} 
+            className="absolute bottom-0 left-0 w-full p-4 text-center"
+            style={{
+              transform: `translateY(${rowVirtualizer.getTotalSize()}px)`,
+            }}
+          >
             {isFetchingNextPage ? (
               <div style={{ color: 'var(--color-raycast-text-secondary)' }}>
                 Loading more...
@@ -296,6 +308,7 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
             ) : null}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
