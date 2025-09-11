@@ -18,7 +18,22 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
   const [attachments, setAttachments] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const sendReply = api.gmail.sendReply.useMutation();
+  const utils = api.useUtils();
+  const sendReply = api.gmail.sendReply.useMutation({
+    onSuccess: (data) => {
+      // Invalidate all relevant caches to show the sent message immediately
+      void utils.gmail.getThread.invalidate({ threadId });
+      void utils.gmail.getThreads.invalidate(); // This invalidates ALL getThreads queries including Sent page
+      
+      console.log("Send successful, optimistic message:", data.optimisticMessage);
+    },
+    onError: (error) => {
+      console.error("Send failed:", error);
+      // Invalidate caches to remove any optimistic updates
+      void utils.gmail.getThread.invalidate({ threadId });
+      void utils.gmail.getThreads.invalidate();
+    },
+  });
   const generateAIDraft = api.gmail.generateAIDraft.useMutation();
 
   const handleSend = async () => {
@@ -34,7 +49,7 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
         attachmentKeys: [], // TODO: Upload attachments first
       });
 
-      // Reset form
+      // Reset form only after successful send
       setIsComposing(false);
       setTo("");
       setCc("");
@@ -42,7 +57,8 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
       setContent("");
       setAttachments([]);
     } catch (error) {
-      console.error("Failed to send reply:", error);
+      // Error is already handled by mutation onError callback
+      // Keep form open so user can retry
     }
   };
 

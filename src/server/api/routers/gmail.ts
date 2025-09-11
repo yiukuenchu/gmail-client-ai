@@ -391,53 +391,166 @@ export const gmailRouter = createTRPCRouter({
         references.push(`<${lastMessage.gmailMessageId}>`);
       }
 
-      // Create raw email with proper formatting
-      const headers = [
-        `Message-ID: ${messageId}`,
-        `From: ${ctx.session.user.email}`,
-        `To: ${input.to.join(", ")}`,
-        input.cc.length > 0 ? `Cc: ${input.cc.join(", ")}` : null,
-        input.bcc.length > 0 ? `Bcc: ${input.bcc.join(", ")}` : null,
-        `Subject: ${input.subject || `Re: ${thread.subject}`}`,
-        lastMessage ? `In-Reply-To: <${lastMessage.gmailMessageId}>` : null,
-        references.length > 0 ? `References: ${references.join(" ")}` : null,
-        `Content-Type: text/plain; charset=utf-8`,
-        `MIME-Version: 1.0`,
-      ].filter(Boolean);
+      const currentDate = new Date();
+      const subjectText = input.subject || `Re: ${thread.subject}`;
 
-      // Construct email with proper header/body separation
-      const email = headers.join("\r\n") + "\r\n\r\n" + input.content;
-
-      // Debug: Log the email content before encoding
-      console.log("Email content being sent:", {
-        subject: input.subject || `Re: ${thread.subject}`,
-        contentLength: input.content.length,
-        content: input.content.substring(0, 100) + "...",
-        fullEmail: email.substring(0, 500) + "..."
-      });
-
-      const encodedMessage = Buffer.from(email, 'utf-8')
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-
-      // Send via Gmail API
-      const response = await gmail.users.messages.send({
-        userId: "me",
-        requestBody: {
-          raw: encodedMessage,
-          threadId: thread.gmailThreadId,
+      // 1. OPTIMISTIC UPDATE: Create sent message in database immediately
+      const optimisticMessage = await ctx.db.message.create({
+        data: {
+          threadId: thread.id,
+          gmailMessageId: `optimistic-${Date.now()}-${Math.random()}`, // Temporary ID
+          gmailThreadId: thread.gmailThreadId,
+          from: ctx.session.user.email!,
+          to: input.to,
+          cc: input.cc,
+          bcc: input.bcc,
+          subject: subjectText,
+          snippet: input.content.substring(0, 100),
+          date: currentDate,
+          textContent: input.content,
+          inReplyTo: lastMessage?.gmailMessageId || null,
+          references: references,
+          labelIds: ["SENT"], // Mark as sent immediately
         },
       });
 
-      console.log("Gmail API response:", {
-        messageId: response.data.id,
-        threadId: response.data.threadId,
-        status: response.status
+      // 2. Update thread's last message date and increment message count
+      await ctx.db.thread.update({
+        where: { id: thread.id },
+        data: {
+          lastMessageDate: currentDate,
+          messageCount: { increment: 1 },
+        },
       });
 
-      return { success: true, messageId: response.data.id };
+      // 3. Ensure SENT label exists and associate with thread
+      let sentLabel = await ctx.db.label.findFirst({
+        where: {
+          userId: ctx.session.user.id,
+          gmailLabelId: "SENT",
+        },
+      });
+
+      if (!sentLabel) {
+        sentLabel = await ctx.db.label.create({
+          data: {
+            userId: ctx.session.user.id,
+            gmailLabelId: "SENT",
+            name: "Sent",
+            type: "SYSTEM",
+          },
+        });
+      }
+
+      // Associate SENT label with thread
+      await ctx.db.labelThread.upsert({
+        where: {
+          labelId_threadId: {
+            labelId: sentLabel.id,
+            threadId: thread.id,
+          },
+        },
+        create: {
+          labelId: sentLabel.id,
+          threadId: thread.id,
+        },
+        update: {},
+      });
+
+      try {
+        // 4. Send via Gmail API
+        const headers = [
+          `Message-ID: ${messageId}`,
+          `From: ${ctx.session.user.email}`,
+          `To: ${input.to.join(", ")}`,
+          input.cc.length > 0 ? `Cc: ${input.cc.join(", ")}` : null,
+          input.bcc.length > 0 ? `Bcc: ${input.bcc.join(", ")}` : null,
+          `Subject: ${subjectText}`,
+          lastMessage ? `In-Reply-To: <${lastMessage.gmailMessageId}>` : null,
+          references.length > 0 ? `References: ${references.join(" ")}` : null,
+          `Content-Type: text/plain; charset=utf-8`,
+          `MIME-Version: 1.0`,
+        ].filter(Boolean);
+
+        const email = headers.join("\r\n") + "\r\n\r\n" + input.content;
+        const encodedMessage = Buffer.from(email, 'utf-8')
+          .toString("base64")
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+
+        const response = await gmail.users.messages.send({
+          userId: "me",
+          requestBody: {
+            raw: encodedMessage,
+            threadId: thread.gmailThreadId,
+          },
+        });
+
+        // 5. Update optimistic message with real Gmail message ID
+        await ctx.db.message.update({
+          where: { id: optimisticMessage.id },
+          data: {
+            gmailMessageId: response.data.id!,
+          },
+        });
+
+        console.log("Message sent successfully:", {
+          optimisticId: optimisticMessage.id,
+          gmailId: response.data.id,
+          threadId: response.data.threadId,
+        });
+
+        return { 
+          success: true, 
+          messageId: response.data.id,
+          optimisticMessage: {
+            id: optimisticMessage.id,
+            from: optimisticMessage.from,
+            to: optimisticMessage.to,
+            subject: optimisticMessage.subject,
+            date: optimisticMessage.date,
+            textContent: optimisticMessage.textContent,
+          }
+        };
+
+      } catch (error) {
+        // 6. ROLLBACK: Remove optimistic updates on send failure
+        console.error("Failed to send message, rolling back:", error);
+        
+        // Remove optimistic message
+        await ctx.db.message.delete({
+          where: { id: optimisticMessage.id },
+        });
+
+        // Revert thread updates
+        await ctx.db.thread.update({
+          where: { id: thread.id },
+          data: {
+            lastMessageDate: thread.lastMessageDate,
+            messageCount: { decrement: 1 },
+          },
+        });
+
+        // Remove SENT label association if this was the only sent message
+        const otherSentMessages = await ctx.db.message.findFirst({
+          where: {
+            threadId: thread.id,
+            labelIds: { has: "SENT" },
+          },
+        });
+
+        if (!otherSentMessages) {
+          await ctx.db.labelThread.deleteMany({
+            where: {
+              labelId: sentLabel.id,
+              threadId: thread.id,
+            },
+          });
+        }
+
+        throw error;
+      }
     }),
 
   generateAIDraft: protectedProcedure
