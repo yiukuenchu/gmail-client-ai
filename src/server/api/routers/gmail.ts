@@ -391,8 +391,8 @@ export const gmailRouter = createTRPCRouter({
         references.push(`<${lastMessage.gmailMessageId}>`);
       }
 
-      // Create raw email
-      const email = [
+      // Create raw email with proper formatting
+      const headers = [
         `Message-ID: ${messageId}`,
         `From: ${ctx.session.user.email}`,
         `To: ${input.to.join(", ")}`,
@@ -402,11 +402,21 @@ export const gmailRouter = createTRPCRouter({
         lastMessage ? `In-Reply-To: <${lastMessage.gmailMessageId}>` : null,
         references.length > 0 ? `References: ${references.join(" ")}` : null,
         `Content-Type: text/plain; charset=utf-8`,
-        "",
-        input.content,
-      ].filter(Boolean).join("\r\n");
+        `MIME-Version: 1.0`,
+      ].filter(Boolean);
 
-      const encodedMessage = Buffer.from(email)
+      // Construct email with proper header/body separation
+      const email = headers.join("\r\n") + "\r\n\r\n" + input.content;
+
+      // Debug: Log the email content before encoding
+      console.log("Email content being sent:", {
+        subject: input.subject || `Re: ${thread.subject}`,
+        contentLength: input.content.length,
+        content: input.content.substring(0, 100) + "...",
+        fullEmail: email.substring(0, 500) + "..."
+      });
+
+      const encodedMessage = Buffer.from(email, 'utf-8')
         .toString("base64")
         .replace(/\+/g, "-")
         .replace(/\//g, "_")
@@ -419,6 +429,12 @@ export const gmailRouter = createTRPCRouter({
           raw: encodedMessage,
           threadId: thread.gmailThreadId,
         },
+      });
+
+      console.log("Gmail API response:", {
+        messageId: response.data.id,
+        threadId: response.data.threadId,
+        status: response.status
       });
 
       return { success: true, messageId: response.data.id };
