@@ -19,42 +19,51 @@ export function Header() {
   };
 
   return (
-    <header className="bg-white border-b border-gray-200 px-6 py-3">
+    <header className="px-6 py-4" style={{ 
+      backgroundColor: 'var(--color-raycast-surface)', 
+      borderBottom: '1px solid var(--color-raycast-border-light)' 
+    }}>
       <div className="flex items-center justify-between">
         <div className="flex items-center flex-1">
-          <h1 className="text-2xl font-semibold text-gray-800">Gmail</h1>
+          <h1 className="text-2xl font-semibold" style={{ color: 'var(--color-raycast-text)' }}>
+            Gmail
+          </h1>
           
           <form onSubmit={handleSearch} className="ml-8 flex-1 max-w-2xl">
-            <div className="relative">
-              <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+            <div className="raycast-search">
+              <SearchIcon className="raycast-search-icon w-5 h-5" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search mail"
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="raycast-search-input"
               />
             </div>
           </form>
         </div>
 
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3 px-3 py-2 rounded-lg" style={{ 
+            backgroundColor: 'var(--color-raycast-bg-tertiary)' 
+          }}>
             {session?.user?.image ? (
               <img
                 src={session.user.image}
                 alt={session.user.name ?? "User"}
-                className="w-8 h-8 rounded-full"
+                className="w-7 h-7 rounded-full"
               />
             ) : (
-              <UserCircleIcon className="w-8 h-8 text-gray-400" />
+              <UserCircleIcon className="w-7 h-7" style={{ color: 'var(--color-raycast-text-secondary)' }} />
             )}
-            <span className="text-sm text-gray-700">{session?.user?.email}</span>
+            <span className="text-sm font-medium" style={{ color: 'var(--color-raycast-text)' }}>
+              {session?.user?.email}
+            </span>
           </div>
           
           <button
             onClick={() => signOut({ callbackUrl: "/" })}
-            className="text-gray-500 hover:text-gray-700 transition-colors"
+            className="raycast-button p-2"
             title="Sign out"
           >
             <LogOutIcon className="w-5 h-5" />

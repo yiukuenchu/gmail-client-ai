@@ -125,7 +125,9 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500">Loading messages...</div>
+        <div style={{ color: 'var(--color-raycast-text-secondary)' }}>
+          Loading messages...
+        </div>
       </div>
     );
   }
@@ -133,7 +135,9 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
   if (isError) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-red-500">Failed to load messages</div>
+        <div style={{ color: 'var(--color-raycast-error)' }}>
+          Failed to load messages
+        </div>
       </div>
     );
   }
@@ -141,7 +145,9 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
   if (allThreads.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500">No messages found</div>
+        <div style={{ color: 'var(--color-raycast-text-secondary)' }}>
+          No messages found
+        </div>
       </div>
     );
   }
@@ -149,7 +155,11 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
   return (
     <div className="h-full flex flex-col">
       {showMetrics && (
-        <div className="px-6 py-2 bg-gray-50 border-b text-sm text-gray-600">
+        <div className="px-6 py-3 text-sm font-medium" style={{ 
+          backgroundColor: 'var(--color-raycast-bg-tertiary)', 
+          borderBottom: '1px solid var(--color-raycast-border-light)', 
+          color: 'var(--color-raycast-text-secondary)' 
+        }}>
           <span>
             {allThreads.length} threads loaded
             {hasNextPage && " • Loading more as you scroll"}
@@ -157,7 +167,7 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
         </div>
       )}
       
-      <div ref={parentRef} className="flex-1 overflow-auto">
+      <div ref={parentRef} className="flex-1 overflow-auto p-4">
         <div
           style={{
             height: `${rowVirtualizer.getTotalSize()}px`,
@@ -185,48 +195,90 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
                 width: "100%",
                 height: `${virtualItem.size}px`,
                 transform: `translateY(${virtualItem.start}px)`,
+                padding: '0 0 8px 0', // Add padding for card spacing
               }}
             >
               <div
                 className={cn(
-                  "flex items-center gap-3 px-6 py-3 hover:bg-gray-50 border-b border-gray-100 transition-colors h-full",
-                  thread.unread && "bg-white font-semibold"
+                  "raycast-card flex items-center gap-3 px-4 py-3 h-full",
+                  thread.unread && "font-medium"
                 )}
+                style={{
+                  backgroundColor: thread.unread 
+                    ? 'var(--color-raycast-selected)' 
+                    : 'var(--color-raycast-surface)',
+                  height: 'calc(100% - 8px)', // Account for card spacing
+                }}
               >
                 <button
                   onClick={(e) => handleToggleStar(e, thread.id, thread.starred)}
                   className={cn(
-                    "p-1 rounded hover:bg-gray-200 transition-colors",
-                    thread.starred ? "text-yellow-500" : "text-gray-400"
+                    "p-1 rounded-md transition-all hover:scale-110",
+                    thread.starred ? "text-yellow-500" : ""
                   )}
+                  style={{
+                    color: thread.starred 
+                      ? '#f59e0b' 
+                      : 'var(--color-raycast-text-tertiary)',
+                  }}
                 >
                   <StarIcon className="w-4 h-4" fill={thread.starred ? "currentColor" : "none"} />
                 </button>
 
                 <div className="w-6">
                   {thread.unread ? (
-                    <MailIcon className="w-5 h-5 text-blue-600" />
+                    <MailIcon className="w-5 h-5" style={{ color: 'var(--color-raycast-accent)' }} />
                   ) : (
-                    <MailOpenIcon className="w-5 h-5 text-gray-400" />
+                    <MailOpenIcon className="w-5 h-5" style={{ color: 'var(--color-raycast-text-tertiary)' }} />
                   )}
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={cn("truncate", thread.unread && "text-gray-900")}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span 
+                      className="truncate font-medium text-sm"
+                      style={{ 
+                        color: thread.unread 
+                          ? 'var(--color-raycast-text)' 
+                          : 'var(--color-raycast-text-secondary)' 
+                      }}
+                    >
                       {fromName}
                     </span>
                     {thread.messageCount > 1 && (
-                      <span className="text-sm text-gray-500">({thread.messageCount})</span>
+                      <span 
+                        className="text-xs px-1.5 py-0.5 rounded-full font-medium"
+                        style={{ 
+                          backgroundColor: 'var(--color-raycast-bg-tertiary)', 
+                          color: 'var(--color-raycast-text-secondary)' 
+                        }}
+                      >
+                        {thread.messageCount}
+                      </span>
                     )}
                   </div>
-                  <div className={cn("text-sm truncate", thread.unread ? "text-gray-800" : "text-gray-600")}>
+                  <div 
+                    className="text-sm truncate mb-1 font-medium"
+                    style={{ 
+                      color: thread.unread 
+                        ? 'var(--color-raycast-text)' 
+                        : 'var(--color-raycast-text-secondary)' 
+                    }}
+                  >
                     {thread.subject}
                   </div>
-                  <div className="text-sm text-gray-500 truncate">{thread.snippet}</div>
+                  <div 
+                    className="text-xs truncate"
+                    style={{ color: 'var(--color-raycast-text-tertiary)' }}
+                  >
+                    {thread.snippet}
+                  </div>
                 </div>
 
-                <div className="text-sm text-gray-500 whitespace-nowrap">
+                <div 
+                  className="text-xs whitespace-nowrap font-medium"
+                  style={{ color: 'var(--color-raycast-text-tertiary)' }}
+                >
                   {formatDistanceToNow(thread.lastMessageDate, { addSuffix: true })}
                 </div>
               </div>
@@ -238,7 +290,9 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
         {hasNextPage && (
           <div ref={loadMoreRef} className="p-4 text-center">
             {isFetchingNextPage ? (
-              <div className="text-gray-500">Loading more...</div>
+              <div style={{ color: 'var(--color-raycast-text-secondary)' }}>
+                Loading more...
+              </div>
             ) : null}
           </div>
         )}

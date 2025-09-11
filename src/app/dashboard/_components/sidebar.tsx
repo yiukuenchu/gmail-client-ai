@@ -49,12 +49,15 @@ export function Sidebar() {
   };
 
   return (
-    <div className="w-64 bg-white border-r border-gray-200 flex flex-col min-h-0 flex-shrink-0">
+    <div className="w-64 flex flex-col min-h-0 flex-shrink-0" style={{ 
+      backgroundColor: 'var(--color-raycast-surface)', 
+      borderRight: '1px solid var(--color-raycast-border-light)' 
+    }}>
       <div className="p-4">
         <button
           onClick={handleSync}
           disabled={syncMailbox.isPending || syncStatus?.currentJob?.status === "RUNNING"}
-          className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg px-4 py-2 flex items-center justify-center gap-2 transition-colors"
+          className="raycast-button primary w-full gap-2"
         >
           <RefreshCwIcon className={cn(
             "w-4 h-4",
@@ -67,7 +70,7 @@ export function Sidebar() {
         </button>
       </div>
 
-      <nav className="flex-1 px-2 pb-4 space-y-1 overflow-y-auto min-h-0">
+      <nav className="flex-1 px-3 pb-4 space-y-1 overflow-y-auto min-h-0">
         {defaultLabels.map((label) => {
           const Icon = label.icon;
           const isActive = isItemActive(label.href);
@@ -77,10 +80,8 @@ export function Sidebar() {
               key={label.id}
               href={label.href}
               className={cn(
-                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                isActive
-                  ? "bg-blue-50 text-blue-700"
-                  : "text-gray-700 hover:bg-gray-100"
+                "raycast-list-item gap-3 text-sm font-medium",
+                isActive && "active"
               )}
             >
               <Icon className="w-5 h-5" />
@@ -92,7 +93,9 @@ export function Sidebar() {
         {userLabels.length > 0 && (
           <>
             <div className="pt-4 pb-2 px-3">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase">Labels</h3>
+              <h3 className="text-xs font-semibold uppercase" style={{ color: 'var(--color-raycast-text-secondary)' }}>
+                Labels
+              </h3>
             </div>
             {userLabels.map((label) => {
               const href = `/dashboard/label/${label.id}`;
@@ -103,10 +106,8 @@ export function Sidebar() {
                   key={label.id}
                   href={href}
                   className={cn(
-                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-blue-50 text-blue-700"
-                      : "text-gray-700 hover:bg-gray-100"
+                    "raycast-list-item gap-3 text-sm font-medium",
+                    isActive && "active"
                   )}
                 >
                   <TagIcon className="w-5 h-5" style={{ color: label.color ?? undefined }} />
@@ -119,7 +120,10 @@ export function Sidebar() {
       </nav>
 
       {syncStatus?.lastSyncedAt && (
-        <div className="px-4 py-2 text-xs text-gray-500 border-t">
+        <div className="px-4 py-2 text-xs" style={{ 
+          color: 'var(--color-raycast-text-tertiary)', 
+          borderTop: '1px solid var(--color-raycast-border-light)' 
+        }}>
           Last synced: {new Date(syncStatus.lastSyncedAt).toLocaleString()}
         </div>
       )}
