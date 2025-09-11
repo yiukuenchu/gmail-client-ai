@@ -59,10 +59,10 @@ export const authConfig = {
     async jwt({ token, account, user }) {
       // Persist the OAuth access_token and refresh_token to the token right after signin
       if (account) {
-        token.refreshToken = account.refresh_token;
+        (token as any).refreshToken = account.refresh_token;
       }
       if (user) {
-        token.id = user.id;
+        (token as any).id = user.id;
       }
       return token;
     },
@@ -83,8 +83,8 @@ export const authConfig = {
         ...session,
         user: {
           ...session.user,
-          id: token.id as string,
-          refreshToken: token.refreshToken as string | undefined,
+          id: (token as any).id as string,
+          refreshToken: (token as any).refreshToken as string | undefined,
         },
       };
     },
