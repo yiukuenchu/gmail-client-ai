@@ -6,6 +6,8 @@ import {
   publicProcedure,
 } from "~/server/api/trpc";
 
+// Minimal post router to prevent build errors
+// This is a placeholder from the T3 template
 export const postRouter = createTRPCRouter({
   hello: publicProcedure
     .input(z.object({ text: z.string() }))
@@ -18,21 +20,23 @@ export const postRouter = createTRPCRouter({
   create: protectedProcedure
     .input(z.object({ name: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.post.create({
-        data: {
-          name: input.name,
-          createdBy: { connect: { id: ctx.session.user.id } },
-        },
-      });
+      // Placeholder - no actual database model
+      return {
+        id: "placeholder",
+        name: input.name,
+        createdAt: new Date(),
+        createdById: ctx.session.user.id,
+      };
     }),
 
   getLatest: protectedProcedure.query(async ({ ctx }) => {
-    const post = await ctx.db.post.findFirst({
-      orderBy: { createdAt: "desc" },
-      where: { createdBy: { id: ctx.session.user.id } },
-    });
-
-    return post ?? null;
+    // Return null since we don't have a post model
+    return null as { 
+      id: string; 
+      name: string; 
+      createdAt: Date; 
+      createdById: string; 
+    } | null;
   }),
 
   getSecretMessage: protectedProcedure.query(() => {

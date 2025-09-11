@@ -7,7 +7,7 @@ interface IntersectionObserverOptions {
 }
 
 export function useIntersection(
-  ref: RefObject<Element>,
+  ref: RefObject<Element | null>,
   options: IntersectionObserverOptions = {}
 ): IntersectionObserverEntry | null {
   const [entry, setEntry] = useState<IntersectionObserverEntry | null>(null);
@@ -18,7 +18,7 @@ export function useIntersection(
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        setEntry(entry);
+        setEntry(entry ?? null);
       },
       options
     );
