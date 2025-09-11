@@ -36,8 +36,20 @@ export function Sidebar() {
 
   const userLabels = labels?.filter(label => label.type === "USER") ?? [];
 
+  // Helper function to determine if a navigation item should be active
+  const isItemActive = (href: string) => {
+    if (pathname === href) return true;
+    
+    // Special case for inbox: make it active for thread detail pages that don't belong to other sections
+    if (href === "/dashboard" && pathname.startsWith("/dashboard/thread/")) {
+      return true;
+    }
+    
+    return false;
+  };
+
   return (
-    <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
+    <div className="w-64 bg-white border-r border-gray-200 flex flex-col min-h-0 flex-shrink-0">
       <div className="p-4">
         <button
           onClick={handleSync}
@@ -55,10 +67,10 @@ export function Sidebar() {
         </button>
       </div>
 
-      <nav className="flex-1 px-2 pb-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 px-2 pb-4 space-y-1 overflow-y-auto min-h-0">
         {defaultLabels.map((label) => {
           const Icon = label.icon;
-          const isActive = pathname === label.href;
+          const isActive = isItemActive(label.href);
           
           return (
             <Link
@@ -84,7 +96,7 @@ export function Sidebar() {
             </div>
             {userLabels.map((label) => {
               const href = `/dashboard/label/${label.id}`;
-              const isActive = pathname === href;
+              const isActive = isItemActive(href);
               
               return (
                 <Link

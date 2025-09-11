@@ -77,10 +77,22 @@ export function MessageView({ message, isExpanded: initialExpanded = false }: Me
             {isLoading ? (
               <div className="py-8 text-center text-gray-500">Loading message content...</div>
             ) : content?.html ? (
-              <div 
-                className="prose prose-sm max-w-none"
-                dangerouslySetInnerHTML={{ __html: sanitizeHtml(content.html) }}
-              />
+              <div className="email-content-container">
+                <iframe
+                  srcDoc={sanitizeHtml(content.html)}
+                  className="w-full min-h-[200px] border-0"
+                  sandbox="allow-same-origin"
+                  style={{ resize: 'vertical' }}
+                  onLoad={(e) => {
+                    const iframe = e.target as HTMLIFrameElement;
+                    if (iframe.contentDocument) {
+                      // Auto-resize iframe to content height
+                      const height = iframe.contentDocument.documentElement.scrollHeight;
+                      iframe.style.height = `${Math.max(height, 200)}px`;
+                    }
+                  }}
+                />
+              </div>
             ) : content?.text ? (
               <div className="whitespace-pre-wrap text-gray-800">{content.text}</div>
             ) : (
@@ -143,12 +155,39 @@ function AttachmentItem({ attachment }: { attachment: Attachment }) {
   );
 }
 
-// Basic HTML sanitization - in production, use a proper library like DOMPurify
+// Enhanced HTML sanitization to prevent CSS interference
 function sanitizeHtml(html: string): string {
-  // Remove script tags and event handlers
-  return html
+  // Create a basic HTML document wrapper to isolate styles
+  const sanitized = html
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
     .replace(/on\w+\s*=\s*"[^"]*"/gi, "")
     .replace(/on\w+\s*=\s*'[^']*'/gi, "")
-    .replace(/javascript:/gi, "");
+    .replace(/javascript:/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "") // Remove style tags
+    .replace(/style\s*=\s*"[^"]*"/gi, "") // Remove inline styles that might affect layout
+    .replace(/style\s*=\s*'[^']*'/gi, "");
+
+  // Wrap in a container that resets styles
+  return `
+    <html>
+      <head>
+        <style>
+          body { 
+            margin: 0; 
+            padding: 16px; 
+            font-family: system-ui, -apple-system, sans-serif;
+            line-height: 1.5;
+            color: #374151;
+          }
+          * { 
+            max-width: 100% !important; 
+          }
+          img { 
+            height: auto !important; 
+          }
+        </style>
+      </head>
+      <body>${sanitized}</body>
+    </html>
+  `;
 }
