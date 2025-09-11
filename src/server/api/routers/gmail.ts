@@ -64,6 +64,68 @@ export const gmailRouter = createTRPCRouter({
       search: z.string().optional(),
     }))
     .query(async ({ ctx, input }) => {
+      let labelCondition = {};
+      
+      // Handle special Gmail system labels
+      if (input.labelId) {
+        switch (input.labelId) {
+          case "INBOX":
+            labelCondition = {
+              labelThreads: {
+                some: {
+                  label: {
+                    gmailLabelId: "INBOX",
+                  },
+                },
+              },
+            };
+            break;
+          case "STARRED":
+            labelCondition = { starred: true };
+            break;
+          case "SENT":
+            labelCondition = {
+              labelThreads: {
+                some: {
+                  label: {
+                    gmailLabelId: "SENT",
+                  },
+                },
+              },
+            };
+            break;
+          case "DRAFT":
+            labelCondition = {
+              labelThreads: {
+                some: {
+                  label: {
+                    gmailLabelId: "DRAFT",
+                  },
+                },
+              },
+            };
+            break;
+          case "TRASH":
+            labelCondition = {
+              labelThreads: {
+                some: {
+                  label: {
+                    gmailLabelId: "TRASH",
+                  },
+                },
+              },
+            };
+            break;
+          default:
+            // Custom label by database ID
+            labelCondition = {
+              labelThreads: {
+                some: { labelId: input.labelId },
+              },
+            };
+        }
+      }
+
       const where = {
         userId: ctx.session.user.id,
         ...(input.unreadOnly && { unread: true }),
@@ -73,11 +135,7 @@ export const gmailRouter = createTRPCRouter({
             { snippet: { contains: input.search, mode: "insensitive" as const } },
           ],
         }),
-        ...(input.labelId && {
-          labelThreads: {
-            some: { labelId: input.labelId },
-          },
-        }),
+        ...labelCondition,
       };
 
       const threads = await ctx.db.thread.findMany({
