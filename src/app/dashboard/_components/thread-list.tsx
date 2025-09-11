@@ -13,9 +13,10 @@ interface ThreadListProps {
   labelId?: string;
   unreadOnly?: boolean;
   search?: string;
+  showMetrics?: boolean;
 }
 
-export function ThreadList({ labelId, unreadOnly, search }: ThreadListProps) {
+export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }: ThreadListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -90,14 +91,24 @@ export function ThreadList({ labelId, unreadOnly, search }: ThreadListProps) {
   }
 
   return (
-    <div ref={parentRef} className="h-full overflow-auto">
-      <div
-        style={{
-          height: `${rowVirtualizer.getTotalSize()}px`,
-          width: "100%",
-          position: "relative",
-        }}
-      >
+    <div className="h-full flex flex-col">
+      {showMetrics && (
+        <div className="px-6 py-2 bg-gray-50 border-b text-sm text-gray-600">
+          <span>
+            {allThreads.length} threads loaded
+            {hasNextPage && " • Loading more as you scroll"}
+          </span>
+        </div>
+      )}
+      
+      <div ref={parentRef} className="flex-1 overflow-auto">
+        <div
+          style={{
+            height: `${rowVirtualizer.getTotalSize()}px`,
+            width: "100%",
+            position: "relative",
+          }}
+        >
         {rowVirtualizer.getVirtualItems().map((virtualItem) => {
           const thread = allThreads[virtualItem.index];
           if (!thread) return null;
@@ -166,15 +177,16 @@ export function ThreadList({ labelId, unreadOnly, search }: ThreadListProps) {
             </Link>
           );
         })}
-      </div>
-
-      {hasNextPage && (
-        <div ref={loadMoreRef} className="p-4 text-center">
-          {isFetchingNextPage ? (
-            <div className="text-gray-500">Loading more...</div>
-          ) : null}
         </div>
-      )}
+
+        {hasNextPage && (
+          <div ref={loadMoreRef} className="p-4 text-center">
+            {isFetchingNextPage ? (
+              <div className="text-gray-500">Loading more...</div>
+            ) : null}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

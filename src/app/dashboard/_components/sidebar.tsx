@@ -11,11 +11,13 @@ import {
   TrashIcon,
   TagIcon,
   RefreshCwIcon,
+  MailIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
 
 const defaultLabels = [
   { id: "inbox", name: "Inbox", icon: InboxIcon, href: "/dashboard" },
+  { id: "all", name: "All Mail", icon: MailIcon, href: "/dashboard/all" },
   { id: "starred", name: "Starred", icon: StarIcon, href: "/dashboard/starred" },
   { id: "sent", name: "Sent", icon: SendIcon, href: "/dashboard/sent" },
   { id: "drafts", name: "Drafts", icon: FileTextIcon, href: "/dashboard/drafts" },
