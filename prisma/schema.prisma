@@ -7,23 +7,7 @@ generator client {
 
 datasource db {
     provider = "postgresql"
-    // NOTE: When using mysql or sqlserver, uncomment the @db.Text annotations in model Account below
-    // Further reading:
-    // https://next-auth.js.org/adapters/prisma#create-the-prisma-schema
-    // https://www.prisma.io/docs/reference/api-reference/prisma-schema-reference#string
     url      = env("DATABASE_URL")
-}
-
-model Post {
-    id        Int      @id @default(autoincrement())
-    name      String
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    createdBy   User   @relation(fields: [createdById], references: [id])
-    createdById String
-
-    @@index([name])
 }
 
 // Necessary for Next auth
@@ -33,12 +17,12 @@ model Account {
     type                     String
     provider                 String
     providerAccountId        String
-    refresh_token            String? // @db.Text
-    access_token             String? // @db.Text
+    refresh_token            String? @db.Text
+    access_token             String? @db.Text
     expires_at               Int?
     token_type               String?
     scope                    String?
-    id_token                 String? // @db.Text
+    id_token                 String? @db.Text
     session_state            String?
     user                     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
     refresh_token_expires_in Int?
@@ -55,14 +39,19 @@ model Session {
 }
 
 model User {
-    id            String    @id @default(cuid())
+    id            String       @id @default(cuid())
     name          String?
-    email         String?   @unique
+    email         String?      @unique
     emailVerified DateTime?
     image         String?
+    syncStatus    SyncStatus   @default(PENDING)
+    lastSyncedAt  DateTime?
     accounts      Account[]
     sessions      Session[]
-    posts         Post[]
+    threads       Thread[]
+    labels        Label[]
+    syncJobs      SyncJob[]
+    drafts        Draft[]
 }
 
 model VerificationToken {
@@ -71,4 +60,170 @@ model VerificationToken {
     expires    DateTime
 
     @@unique([identifier, token])
+}
+
+// Gmail-specific models
+model Thread {
+    id               String    @id @default(cuid())
+    userId           String
+    gmailThreadId    String
+    subject          String
+    snippet          String    @db.Text
+    lastMessageDate  DateTime
+    unread           Boolean   @default(false)
+    starred          Boolean   @default(false)
+    important        Boolean   @default(false)
+    messageCount     Int       @default(1)
+    createdAt        DateTime  @default(now())
+    updatedAt        DateTime  @updatedAt
+
+    user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+    messages         Message[]
+    labelThreads     LabelThread[]
+
+    @@unique([userId, gmailThreadId])
+    @@index([userId, lastMessageDate])
+    @@index([userId, unread])
+    @@index([subject])
+}
+
+model Message {
+    id               String       @id @default(cuid())
+    threadId         String
+    gmailMessageId   String       @unique
+    gmailThreadId    String
+    from             String
+    to               String[]
+    cc               String[]
+    bcc              String[]
+    subject          String
+    snippet          String       @db.Text
+    date             DateTime
+    htmlS3Key        String?      // S3 key for HTML content
+    textContent      String?      @db.Text
+    inReplyTo        String?
+    references       String[]
+    labelIds         String[]
+    createdAt        DateTime     @default(now())
+
+    thread           Thread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+    attachments      Attachment[]
+
+    @@index([gmailMessageId])
+    @@index([threadId])
+    @@index([from])
+    @@index([date])
+}
+
+model Attachment {
+    id               String   @id @default(cuid())
+    messageId        String
+    filename         String
+    mimeType         String
+    size             Int
+    s3Key            String
+    gmailAttachmentId String
+    createdAt        DateTime @default(now())
+
+    message          Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+    @@index([messageId])
+}
+
+model Label {
+    id               String        @id @default(cuid())
+    userId           String
+    gmailLabelId     String
+    name             String
+    type             LabelType
+    color            String?
+    messageListVisibility String?
+    labelListVisibility String?
+    createdAt        DateTime      @default(now())
+
+    user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+    labelThreads     LabelThread[]
+
+    @@unique([userId, gmailLabelId])
+    @@index([userId])
+}
+
+model LabelThread {
+    labelId          String
+    threadId         String
+    createdAt        DateTime @default(now())
+
+    label            Label    @relation(fields: [labelId], references: [id], onDelete: Cascade)
+    thread           Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+    @@id([labelId, threadId])
+    @@index([threadId])
+    @@index([labelId])
+}
+
+model SyncJob {
+    id               String       @id @default(cuid())
+    userId           String
+    status           JobStatus
+    type             SyncType
+    progress         Float        @default(0)
+    totalItems       Int          @default(0)
+    processedItems   Int          @default(0)
+    error            String?
+    startedAt        DateTime     @default(now())
+    completedAt      DateTime?
+    nextPageToken    String?
+
+    user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@index([userId, status])
+    @@index([startedAt])
+}
+
+model Draft {
+    id               String       @id @default(cuid())
+    userId           String
+    threadId         String?
+    to               String[]
+    cc               String[]
+    bcc              String[]
+    subject          String
+    htmlContent      String       @db.Text
+    textContent      String       @db.Text
+    attachmentS3Keys String[]
+    inReplyTo        String?
+    references       String[]
+    createdAt        DateTime     @default(now())
+    updatedAt        DateTime     @updatedAt
+
+    user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@index([userId])
+}
+
+// Enums
+enum SyncStatus {
+    PENDING
+    SYNCING
+    COMPLETED
+    FAILED
+}
+
+enum LabelType {
+    SYSTEM
+    USER
+}
+
+enum JobStatus {
+    PENDING
+    RUNNING
+    COMPLETED
+    FAILED
+    CANCELLED
+}
+
+enum SyncType {
+    FULL
+    PARTIAL
+    WEBHOOK
 }
