@@ -13,7 +13,35 @@ export default function ThreadPage() {
   const threadId = params.threadId as string;
 
   const { data: thread, isLoading, error } = api.gmail.getThread.useQuery({ threadId });
-  const toggleStar = api.gmail.toggleStar.useMutation();
+  const utils = api.useUtils();
+  const toggleStar = api.gmail.toggleStar.useMutation({
+    onMutate: async ({ threadId, starred }) => {
+      // Cancel outgoing refetches
+      await utils.gmail.getThread.cancel({ threadId });
+
+      // Snapshot previous value
+      const previousThread = utils.gmail.getThread.getData({ threadId });
+
+      // Optimistically update
+      utils.gmail.getThread.setData({ threadId }, (old) => {
+        if (!old) return old;
+        return { ...old, starred };
+      });
+
+      return { previousThread };
+    },
+    onError: (err, variables, context) => {
+      // Rollback on error
+      if (context?.previousThread) {
+        utils.gmail.getThread.setData({ threadId: variables.threadId }, context.previousThread);
+      }
+    },
+    onSettled: () => {
+      // Invalidate all related queries to ensure consistency across all views
+      void utils.gmail.getThread.invalidate({ threadId });
+      void utils.gmail.getThreads.invalidate(); // This invalidates ALL getThreads queries
+    },
+  });
 
   if (isLoading) {
     return (
@@ -32,14 +60,8 @@ export default function ThreadPage() {
   }
 
   const handleToggleStar = () => {
-    toggleStar.mutate(
-      { threadId: thread.id, starred: !thread.starred },
-      {
-        onSuccess: () => {
-          // Optimistically update UI
-        },
-      }
-    );
+    if (!thread) return;
+    toggleStar.mutate({ threadId: thread.id, starred: !thread.starred });
   };
 
   return (

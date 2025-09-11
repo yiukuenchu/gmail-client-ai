@@ -59,7 +59,63 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
     overscan: 5,
   });
 
-  const toggleStar = api.gmail.toggleStar.useMutation();
+  const utils = api.useUtils();
+  const toggleStar = api.gmail.toggleStar.useMutation({
+    onMutate: async ({ threadId, starred }) => {
+      // Cancel any outgoing refetches
+      await utils.gmail.getThreads.cancel();
+
+      // Snapshot the previous value
+      const previousThreads = utils.gmail.getThreads.getData();
+
+      // Optimistically update all relevant caches
+      const updateCache = (data: any) => {
+        if (!data) return data;
+        
+        return {
+          ...data,
+          pages: data.pages.map((page: any) => ({
+            ...page,
+            threads: page.threads.map((thread: any) =>
+              thread.id === threadId
+                ? { ...thread, starred }
+                : thread
+            )
+          }))
+        };
+      };
+
+      // Update current view cache
+      utils.gmail.getThreads.setInfiniteData(
+        { labelId, unreadOnly, search },
+        updateCache
+      );
+
+      // Update starred page cache specifically
+      utils.gmail.getThreads.setInfiniteData(
+        { labelId: "STARRED", unreadOnly: false, search: undefined },
+        updateCache
+      );
+
+      // Update inbox cache if different
+      if (labelId !== undefined) {
+        utils.gmail.getThreads.setInfiniteData(
+          { labelId: undefined, unreadOnly: false, search: undefined },
+          updateCache
+        );
+      }
+
+      return { previousThreads };
+    },
+    onError: (err, variables, context) => {
+      // Rollback is handled by the automatic invalidation
+      // The invalidation will refetch fresh data from the server
+    },
+    onSettled: () => {
+      // Invalidate all thread queries to ensure consistency across all views
+      void utils.gmail.getThreads.invalidate();
+    },
+  });
 
   const handleToggleStar = (e: React.MouseEvent, threadId: string, currentStarred: boolean) => {
     e.preventDefault();
