@@ -72,7 +72,19 @@ export const authConfig = {
       }
       return token;
     },
-    async session({ session, token }) {
+    async session({ session, token, user }) {
+      // When using database sessions, user object is available
+      if (user) {
+        return {
+          ...session,
+          user: {
+            ...session.user,
+            id: user.id,
+          },
+        };
+      }
+      
+      // When using JWT tokens, use token data
       return {
         ...session,
         user: {
@@ -82,9 +94,5 @@ export const authConfig = {
         },
       };
     },
-  },
-  pages: {
-    signIn: "/auth/signin",
-    error: "/auth/error",
   },
 } satisfies NextAuthConfig;
