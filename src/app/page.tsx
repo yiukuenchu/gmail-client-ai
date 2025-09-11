@@ -1,69 +1,70 @@
 import Link from "next/link";
-
-import { LatestPost } from "~/app/_components/post";
+import { redirect } from "next/navigation";
 import { auth } from "~/server/auth";
-import { api, HydrateClient } from "~/trpc/server";
+import { MailIcon } from "lucide-react";
 
 export default async function Home() {
-  const hello = await api.post.hello({ text: "from tRPC" });
   const session = await auth();
 
-  if (session?.user) {
-    void api.post.getLatest.prefetch();
+  if (session) {
+    redirect("/dashboard");
   }
 
   return (
-    <HydrateClient>
-      <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-[#2e026d] to-[#15162c] text-white">
-        <div className="container flex flex-col items-center justify-center gap-12 px-4 py-16">
-          <h1 className="text-5xl font-extrabold tracking-tight sm:text-[5rem]">
-            Create <span className="text-[hsl(280,100%,70%)]">T3</span> App
-          </h1>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-8">
-            <Link
-              className="flex max-w-xs flex-col gap-4 rounded-xl bg-white/10 p-4 hover:bg-white/20"
-              href="https://create.t3.gg/en/usage/first-steps"
-              target="_blank"
-            >
-              <h3 className="text-2xl font-bold">First Steps →</h3>
-              <div className="text-lg">
-                Just the basics - Everything you need to know to set up your
-                database and authentication.
-              </div>
-            </Link>
-            <Link
-              className="flex max-w-xs flex-col gap-4 rounded-xl bg-white/10 p-4 hover:bg-white/20"
-              href="https://create.t3.gg/en/introduction"
-              target="_blank"
-            >
-              <h3 className="text-2xl font-bold">Documentation →</h3>
-              <div className="text-lg">
-                Learn more about Create T3 App, the libraries it uses, and how
-                to deploy it.
-              </div>
-            </Link>
-          </div>
-          <div className="flex flex-col items-center gap-2">
-            <p className="text-2xl text-white">
-              {hello ? hello.greeting : "Loading tRPC query..."}
-            </p>
-
-            <div className="flex flex-col items-center justify-center gap-4">
-              <p className="text-center text-2xl text-white">
-                {session && <span>Logged in as {session.user?.name}</span>}
-              </p>
-              <Link
-                href={session ? "/api/auth/signout" : "/api/auth/signin"}
-                className="rounded-full bg-white/10 px-10 py-3 font-semibold no-underline transition hover:bg-white/20"
-              >
-                {session ? "Sign out" : "Sign in"}
-              </Link>
-            </div>
-          </div>
-
-          {session?.user && <LatestPost />}
+    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-blue-50 to-white">
+      <div className="container flex flex-col items-center justify-center gap-12 px-4 py-16">
+        <div className="flex items-center gap-4">
+          <MailIcon className="w-16 h-16 text-blue-600" />
+          <h1 className="text-5xl font-bold text-gray-900">Gmail Client</h1>
         </div>
-      </main>
-    </HydrateClient>
+        
+        <p className="text-xl text-gray-600 text-center max-w-2xl">
+          A modern Gmail client with AI-powered draft replies. Connect your Gmail account to get started.
+        </p>
+
+        <div className="flex flex-col gap-4 items-center">
+          <Link
+            href="/api/auth/signin"
+            className="rounded-lg bg-blue-600 px-8 py-3 text-lg font-semibold text-white no-underline transition hover:bg-blue-700"
+          >
+            Sign in with Google
+          </Link>
+          
+          <p className="text-sm text-gray-500">
+            We'll request access to read and send emails on your behalf
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-12 max-w-4xl">
+          <div className="text-center">
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <MailIcon className="w-6 h-6 text-blue-600" />
+            </div>
+            <h3 className="font-semibold text-gray-900 mb-2">Fast Sync</h3>
+            <p className="text-sm text-gray-600">Sync hundreds of threads per minute with efficient batch processing</p>
+          </div>
+          
+          <div className="text-center">
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-gray-900 mb-2">AI Draft Replies</h3>
+            <p className="text-sm text-gray-600">Generate intelligent email replies with AI assistance</p>
+          </div>
+          
+          <div className="text-center">
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+              <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-gray-900 mb-2">Powerful Search</h3>
+            <p className="text-sm text-gray-600">Search through thousands of emails instantly</p>
+          </div>
+        </div>
+      </div>
+    </main>
   );
 }
