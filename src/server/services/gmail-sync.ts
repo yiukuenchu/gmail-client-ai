@@ -47,14 +47,20 @@ export class GmailSyncService {
       });
       this.syncJobId = syncJob.id;
 
-      // Update user sync status
+      // Update user sync status and show initial progress
       await db.user.update({
         where: { id: this.userId },
         data: { syncStatus: "SYNCING" },
       });
 
+      // Show 1% progress immediately for production visibility
+      await this.updateSyncProgress(1, 100);
+
       // Sync labels first
       await this.syncLabels();
+      
+      // Show 3% progress after labels
+      await this.updateSyncProgress(3, 100);
 
       // Sync threads
       await this.syncThreads();
@@ -91,10 +97,7 @@ export class GmailSyncService {
         data: { syncStatus: "FAILED" },
       });
       
-      // Don't throw in production to avoid killing the serverless function
-      if (process.env.NODE_ENV !== 'production') {
-        throw error;
-      }
+      throw error;
     }
   }
 
@@ -165,49 +168,10 @@ export class GmailSyncService {
     let pageToken: string | undefined;
     let totalThreads = 0;
     let processedThreads = 0;
-    const startTime = Date.now();
-    const SERVERLESS_TIMEOUT = process.env.NODE_ENV === 'development' ? 300000 : 45000; // 5min dev, 45s prod
 
     console.log("🔄 Starting thread sync...");
 
-    // Check if we're resuming from a previous sync
-    if (this.syncJobId) {
-      const existingJob = await db.syncJob.findUnique({
-        where: { id: this.syncJobId },
-      });
-      if (existingJob?.processedItems) {
-        processedThreads = existingJob.processedItems;
-        console.log(`📌 Resuming sync from ${processedThreads} processed threads`);
-      }
-    }
-
     do {
-      // Check timeout before processing each page
-      const elapsedTime = Date.now() - startTime;
-      if (elapsedTime > SERVERLESS_TIMEOUT && pageToken) {
-        console.log("⏱️ Approaching serverless timeout, saving progress...");
-        
-        // Save progress and nextPageToken for continuation
-        if (this.syncJobId) {
-          await db.syncJob.update({
-            where: { id: this.syncJobId },
-            data: {
-              processedItems: processedThreads,
-              totalItems: totalThreads,
-              nextPageToken: pageToken,
-              progress: Math.min((processedThreads / Math.max(totalThreads, 1)) * 100, 100),
-            },
-          });
-        }
-        
-        console.log(`💾 Saved progress: ${processedThreads}/${totalThreads} threads`);
-        
-        // Schedule continuation in production
-        await this.scheduleContinuation();
-        
-        return; // Exit gracefully
-      }
-
       // Fetch threads page
       const response = await this.gmail.users.threads.list({
         userId: "me",
@@ -216,19 +180,14 @@ export class GmailSyncService {
       });
 
       const threads = response.data.threads || [];
-      totalThreads = response.data.resultSizeEstimate || Math.max(totalThreads, processedThreads + threads.length);
+      // Update total with actual count as we discover more threads
+      const currentEstimate = response.data.resultSizeEstimate || 0;
+      totalThreads = Math.max(totalThreads, currentEstimate, processedThreads + threads.length);
       
       console.log(`📧 Processing page: ${threads.length} threads (total estimate: ${totalThreads})`);
       
-      // Process threads in batches with timeout checks
+      // Process threads in batches
       for (let i = 0; i < threads.length; i += BATCH_SIZE) {
-        // Check timeout before each batch
-        const batchElapsed = Date.now() - startTime;
-        if (batchElapsed > SERVERLESS_TIMEOUT) {
-          console.log("⏱️ Timeout during batch processing");
-          return;
-        }
-
         const batch = threads.slice(i, i + BATCH_SIZE);
         
         // Process batch concurrently
@@ -449,46 +408,6 @@ export class GmailSyncService {
           threadId,
         },
       });
-    }
-  }
-
-  private async scheduleContinuation(): Promise<void> {
-    // Only in production/serverless environments
-    if (!process.env.VERCEL_URL && process.env.NODE_ENV !== 'production') {
-      return;
-    }
-
-    try {
-      console.log("📅 Scheduling sync continuation...");
-      
-      const continueUrl = `${process.env.VERCEL_URL || 'http://localhost:3000'}/api/sync/continue`;
-      
-      // Schedule with a small delay to ensure current process completes
-      setTimeout(() => {
-        fetch(continueUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.CRON_SECRET || 'development'}`,
-          },
-          body: JSON.stringify({
-            userId: this.userId,
-          }),
-        })
-        .then(response => {
-          if (response.ok) {
-            console.log("✅ Sync continuation scheduled");
-          } else {
-            console.error("❌ Failed to schedule continuation:", response.status);
-          }
-        })
-        .catch(error => {
-          console.error("❌ Error scheduling continuation:", error);
-        });
-      }, 2000); // 2 second delay
-
-    } catch (error) {
-      console.error("Failed to schedule continuation:", error);
     }
   }
 }
