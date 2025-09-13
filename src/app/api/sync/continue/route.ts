@@ -44,8 +44,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Gmail not connected" }, { status: 401 });
     }
 
-    // Continue the sync
-    await syncService.syncMailbox(incompleteSync.type);
+    // Continue the sync from where it left off
+    await syncService.syncMailbox(incompleteSync.type, incompleteSync.id);
 
     return NextResponse.json({
       message: "Sync continued",

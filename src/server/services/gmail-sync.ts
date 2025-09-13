@@ -35,17 +35,35 @@ export class GmailSyncService {
     return new GmailSyncService(gmail, userId);
   }
 
-  async syncMailbox(syncType: SyncType = "FULL"): Promise<void> {
+  async syncMailbox(syncType: SyncType = "FULL", resumeFromJobId?: string): Promise<void> {
     try {
-      // Create sync job
-      const syncJob = await db.syncJob.create({
-        data: {
-          userId: this.userId,
-          status: "RUNNING",
-          type: syncType,
-        },
-      });
-      this.syncJobId = syncJob.id;
+      let syncJob;
+      let isResuming = false;
+      
+      if (resumeFromJobId) {
+        // Resume existing job
+        syncJob = await db.syncJob.findUnique({
+          where: { id: resumeFromJobId },
+        });
+        
+        if (!syncJob || syncJob.status !== "RUNNING") {
+          throw new Error("Invalid or completed sync job for resume");
+        }
+        
+        this.syncJobId = syncJob.id;
+        isResuming = true;
+        console.log(`📂 Resuming sync job ${syncJob.id} from page token: ${syncJob.nextPageToken ? 'yes' : 'start'}`);
+      } else {
+        // Create new sync job
+        syncJob = await db.syncJob.create({
+          data: {
+            userId: this.userId,
+            status: "RUNNING",
+            type: syncType,
+          },
+        });
+        this.syncJobId = syncJob.id;
+      }
 
       // Update user sync status and show initial progress
       await db.user.update({
@@ -54,18 +72,23 @@ export class GmailSyncService {
       });
 
       // Show 1% progress immediately for production visibility
-      await this.updateSyncProgress(1, 100);
+      if (!isResuming) {
+        await this.updateSyncProgress(1, 100);
 
-      // Sync labels first
-      await this.syncLabels();
-      
-      // Show 3% progress after labels
-      await this.updateSyncProgress(3, 100);
+        // Sync labels first (skip if resuming)
+        await this.syncLabels();
+        
+        // Show 3% progress after labels
+        await this.updateSyncProgress(3, 100);
+      }
 
-      // Sync threads
-      await this.syncThreads();
+      // Sync threads (will resume from saved state if applicable)
+      console.log("📋 Starting thread sync phase");
+      await this.syncThreads(isResuming ? syncJob : null);
+      console.log("📋 Thread sync phase completed");
 
       // Mark sync as completed
+      console.log("🏁 Marking sync job as completed");
       await this.completeSyncJob("COMPLETED");
       
       await db.user.update({
@@ -110,6 +133,7 @@ export class GmailSyncService {
         status,
         completedAt: new Date(),
         progress: status === "COMPLETED" ? 100 : undefined,
+        nextPageToken: null, // Clear token when job completes
         error,
       },
     });
@@ -164,14 +188,42 @@ export class GmailSyncService {
     }
   }
 
-  private async syncThreads(): Promise<void> {
+  private async syncThreads(resumeFromJob?: any): Promise<void> {
     let pageToken: string | undefined;
     let totalThreads = 0;
     let processedThreads = 0;
+    const startTime = Date.now();
+    const PRODUCTION_TIMEOUT = 280000; // 280 seconds - safe margin for 300s Vercel limit
 
-    console.log("🔄 Starting thread sync...");
+    // Resume from saved state if available
+    if (resumeFromJob?.nextPageToken) {
+      pageToken = resumeFromJob.nextPageToken;
+      processedThreads = resumeFromJob.processedItems || 0;
+      totalThreads = resumeFromJob.totalItems || 0;
+      console.log(`🔄 Resuming thread sync from page token, already processed: ${processedThreads}/${totalThreads}`);
+    } else {
+      console.log("🔄 Starting thread sync...");
+    }
 
     do {
+      // Check timeout before each page (only in production)
+      if (process.env.NODE_ENV === 'production') {
+        const elapsedTime = Date.now() - startTime;
+        if (elapsedTime > PRODUCTION_TIMEOUT) {
+          console.log(`⏰ PRODUCTION TIMEOUT: Processed ${processedThreads}/${totalThreads} threads in ${elapsedTime}ms`);
+          console.log(`💾 Saving progress and exiting gracefully`);
+          
+          // Schedule continuation if there's more work
+          if (pageToken && this.syncJobId) {
+            console.log(`🔄 Scheduling automatic continuation...`);
+            // In production, you could trigger a webhook or use a job queue here
+            // For now, we'll just exit and let the user manually continue
+          }
+          
+          return; // Exit gracefully before Vercel kills us
+        }
+      }
+
       // Fetch threads page
       const response = await this.gmail.users.threads.list({
         userId: "me",
@@ -184,7 +236,7 @@ export class GmailSyncService {
       const currentEstimate = response.data.resultSizeEstimate || 0;
       totalThreads = Math.max(totalThreads, currentEstimate, processedThreads + threads.length);
       
-      console.log(`📧 Processing page: ${threads.length} threads (total estimate: ${totalThreads})`);
+      console.log(`📧 Processing page: ${threads.length} threads (total estimate: ${totalThreads}, processed: ${processedThreads})`);
       
       // Process threads in batches
       for (let i = 0; i < threads.length; i += BATCH_SIZE) {
@@ -198,16 +250,32 @@ export class GmailSyncService {
         processedThreads += batch.length;
         await this.updateSyncProgress(processedThreads, totalThreads);
         
-        // Log progress less frequently
-        if (processedThreads % 50 === 0) {
-          console.log(`⚡ Processed ${processedThreads}/${totalThreads} threads`);
+        // Log progress more frequently for debugging
+        if (processedThreads % 10 === 0 || processedThreads === totalThreads) {
+          const elapsedTime = Date.now() - startTime;
+          console.log(`⚡ Processed ${processedThreads}/${totalThreads} threads (${Math.round(elapsedTime/1000)}s elapsed)`);
         }
       }
 
       pageToken = response.data.nextPageToken ?? undefined;
+      
+      // Save progress after each page for resumability
+      if (this.syncJobId) {
+        await db.syncJob.update({
+          where: { id: this.syncJobId },
+          data: {
+            nextPageToken: pageToken || null,
+            processedItems: processedThreads,
+            totalItems: totalThreads,
+            progress: Math.round((processedThreads / totalThreads) * 100),
+          },
+        });
+        console.log(`💾 Saved sync progress: ${processedThreads}/${totalThreads} threads, nextPageToken: ${pageToken ? 'yes' : 'complete'}`);
+      }
     } while (pageToken);
     
-    console.log(`✅ Sync completed: ${processedThreads} threads processed`);
+    const totalElapsed = Date.now() - startTime;
+    console.log(`✅ Thread sync completed: ${processedThreads} threads processed in ${Math.round(totalElapsed/1000)}s`);
   }
 
   private async syncThread(gmailThreadId: string): Promise<void> {
@@ -274,6 +342,10 @@ export class GmailSyncService {
       await this.syncThreadLabels(thread.id, lastMessage.labelIds || []);
     } catch (error) {
       console.error(`Failed to sync thread ${gmailThreadId}:`, error);
+      // Re-throw to stop sync on critical errors
+      if (error instanceof Error && error.message.includes('connection')) {
+        throw error;
+      }
     }
   }
 
