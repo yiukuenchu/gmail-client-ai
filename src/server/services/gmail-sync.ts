@@ -136,32 +136,35 @@ export class GmailSyncService {
     const response = await this.gmail.users.labels.list({ userId: "me" });
     const labels = response.data.labels as GmailLabel[] || [];
 
-    for (const label of labels) {
-      await db.label.upsert({
-        where: {
-          userId_gmailLabelId: {
+    // Batch all label operations in a single transaction
+    await db.$transaction(async (tx) => {
+      for (const label of labels) {
+        await tx.label.upsert({
+          where: {
+            userId_gmailLabelId: {
+              userId: this.userId,
+              gmailLabelId: label.id,
+            },
+          },
+          update: {
+            name: label.name,
+            type: label.type === "system" ? "SYSTEM" : "USER",
+            color: label.color?.backgroundColor,
+            messageListVisibility: label.messageListVisibility,
+            labelListVisibility: label.labelListVisibility,
+          },
+          create: {
             userId: this.userId,
             gmailLabelId: label.id,
+            name: label.name,
+            type: label.type === "system" ? "SYSTEM" : "USER",
+            color: label.color?.backgroundColor,
+            messageListVisibility: label.messageListVisibility,
+            labelListVisibility: label.labelListVisibility,
           },
-        },
-        update: {
-          name: label.name,
-          type: label.type === "system" ? "SYSTEM" : "USER",
-          color: label.color?.backgroundColor,
-          messageListVisibility: label.messageListVisibility,
-          labelListVisibility: label.labelListVisibility,
-        },
-        create: {
-          userId: this.userId,
-          gmailLabelId: label.id,
-          name: label.name,
-          type: label.type === "system" ? "SYSTEM" : "USER",
-          color: label.color?.backgroundColor,
-          messageListVisibility: label.messageListVisibility,
-          labelListVisibility: label.labelListVisibility,
-        },
-      });
-    }
+        });
+      }
+    });
   }
 
   private async syncThreads(): Promise<void> {
