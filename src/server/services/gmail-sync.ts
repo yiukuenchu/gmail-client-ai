@@ -232,7 +232,9 @@ export class GmailSyncService {
     });
 
     const threadDataResults = await Promise.all(threadPromises);
-    const validThreads = threadDataResults.filter(Boolean);
+    const validThreads = threadDataResults.filter((thread): thread is NonNullable<typeof thread> => 
+      thread !== null && thread !== undefined
+    );
     
     console.log(`✅ Fetched ${validThreads.length}/${threadItems.length} threads from Gmail API`);
 
