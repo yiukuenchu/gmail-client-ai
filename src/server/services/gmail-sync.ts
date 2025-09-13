@@ -102,6 +102,360 @@ export class GmailSyncService {
     }
   }
 
+  async syncBatch(): Promise<{ completed: boolean; progress: number; processedItems: number; totalItems: number }> {
+    const BATCH_SIZE = 20; // Increased for 400+ threads/min target
+    const BATCH_TIMEOUT = 30000; // 30 seconds
+    const startTime = Date.now();
+    
+    console.log(`🔄 Starting sync batch (batch size: ${BATCH_SIZE})`);
+    
+    // Find or create sync job
+    let syncJob = await db.syncJob.findFirst({
+      where: {
+        userId: this.userId,
+        status: "RUNNING",
+      },
+      orderBy: { startedAt: "desc" },
+    });
+
+    if (!syncJob) {
+      // Start new sync job
+      console.log(`📝 Creating new sync job for user ${this.userId}`);
+      syncJob = await db.syncJob.create({
+        data: {
+          userId: this.userId,
+          status: "RUNNING",
+          type: "FULL",
+        },
+      });
+      
+      // Sync labels first for new jobs
+      console.log(`🏷️ Syncing labels for new job...`);
+      await this.syncLabels();
+      console.log(`✅ Labels synced`);
+    } else {
+      console.log(`📂 Continuing existing sync job ${syncJob.id} (processed: ${syncJob.processedItems})`);
+    }
+
+    this.syncJobId = syncJob.id;
+    
+    // Get next batch of threads
+    console.log(`📥 Fetching next batch of ${BATCH_SIZE} threads (pageToken: ${syncJob.nextPageToken ? 'yes' : 'none'})`);
+    const threads = await this.getNextThreadBatch(BATCH_SIZE, syncJob.nextPageToken);
+    console.log(`📧 Retrieved ${threads.items.length} threads (estimated total: ${threads.resultSizeEstimate})`);
+    
+    if (threads.items.length === 0) {
+      // No more threads, complete the sync
+      console.log(`🏁 No more threads to process, completing sync`);
+      await this.completeSyncJob("COMPLETED");
+      await db.user.update({
+        where: { id: this.userId },
+        data: { 
+          syncStatus: "COMPLETED",
+          lastSyncedAt: new Date(),
+        },
+      });
+      
+      return {
+        completed: true,
+        progress: 100,
+        processedItems: syncJob.processedItems || 0,
+        totalItems: syncJob.totalItems || 0,
+      };
+    }
+
+    // Process threads with bulk operations for better performance
+    console.log(`🚀 Processing ${threads.items.length} threads with bulk operations`);
+    const bulkResult = await this.syncThreadsBulk(threads.items);
+    const processedInBatch = bulkResult.processedCount;
+    
+    const elapsed = Date.now() - startTime;
+    console.log(`🏁 Bulk batch completed: ${processedInBatch}/${threads.items.length} threads in ${elapsed}ms`);
+
+    // Update progress
+    const newProcessedItems = (syncJob.processedItems || 0) + processedInBatch;
+    const estimatedTotal = Math.max(threads.resultSizeEstimate || 0, newProcessedItems);
+    
+    console.log(`💾 Updating sync progress: ${newProcessedItems}/${estimatedTotal} threads processed`);
+    await db.syncJob.update({
+      where: { id: this.syncJobId },
+      data: {
+        nextPageToken: threads.nextPageToken,
+        processedItems: newProcessedItems,
+        totalItems: estimatedTotal,
+        progress: estimatedTotal > 0 ? Math.round((newProcessedItems / estimatedTotal) * 100) : 0,
+      },
+    });
+
+    const progress = estimatedTotal > 0 ? Math.round((newProcessedItems / estimatedTotal) * 100) : 0;
+    const totalElapsed = Date.now() - startTime;
+    
+    console.log(`📊 Batch completed: ${processedInBatch} threads processed in ${totalElapsed}ms (${progress}% total progress)`);
+    
+    return {
+      completed: !threads.nextPageToken,
+      progress: Math.min(progress, 100),
+      processedItems: newProcessedItems,
+      totalItems: estimatedTotal,
+    };
+  }
+
+  private async getNextThreadBatch(batchSize: number, pageToken?: string | null) {
+    const response = await this.gmail.users.threads.list({
+      userId: "me",
+      maxResults: batchSize,
+      pageToken: pageToken || undefined,
+    });
+
+    return {
+      items: response.data.threads || [],
+      nextPageToken: response.data.nextPageToken || null,
+      resultSizeEstimate: response.data.resultSizeEstimate || 0,
+    };
+  }
+
+  private async syncThreadsBulk(threadItems: any[]): Promise<{ processedCount: number }> {
+    console.log(`📥 Fetching ${threadItems.length} threads from Gmail API in parallel`);
+    
+    // Step 1: Fetch all thread data in parallel
+    const threadPromises = threadItems.map(async (threadItem) => {
+      try {
+        const response = await this.gmail.users.threads.get({
+          userId: "me",
+          id: threadItem.id!,
+        });
+        return response.data;
+      } catch (error) {
+        console.error(`Failed to fetch thread ${threadItem.id}:`, error);
+        return null;
+      }
+    });
+
+    const threadDataResults = await Promise.all(threadPromises);
+    const validThreads = threadDataResults.filter(Boolean);
+    
+    console.log(`✅ Fetched ${validThreads.length}/${threadItems.length} threads from Gmail API`);
+
+    // Step 2: Prepare bulk data
+    const threadsToCreate = [];
+    const messagesToCreate = [];
+    const attachmentsToProcess = [];
+    const s3UploadTasks = [];
+
+    for (const threadData of validThreads) {
+      if (!threadData.messages || threadData.messages.length === 0) continue;
+
+      const messages = threadData.messages as GmailMessage[];
+      const lastMessage = messages[messages.length - 1];
+      const firstMessage = messages[0];
+      
+      const subject = getHeaderValue(lastMessage.payload.headers, "Subject") || 
+                     getHeaderValue(firstMessage.payload.headers, "Subject") || 
+                     "(no subject)";
+
+      const isUnread = lastMessage.labelIds?.includes("UNREAD") ?? false;
+      const isStarred = lastMessage.labelIds?.includes("STARRED") ?? false;
+      const isImportant = lastMessage.labelIds?.includes("IMPORTANT") ?? false;
+
+      // Prepare thread data
+      threadsToCreate.push({
+        userId: this.userId,
+        gmailThreadId: threadData.id!,
+        subject,
+        snippet: threadData.snippet || "",
+        lastMessageDate: new Date(parseInt(lastMessage.internalDate)),
+        unread: isUnread,
+        starred: isStarred,
+        important: isImportant,
+        messageCount: messages.length,
+      });
+
+      // Prepare message data
+      for (const message of messages) {
+        const headers = message.payload.headers;
+        const from = getHeaderValue(headers, "From");
+        const to = parseEmailAddresses(getHeaderValue(headers, "To"));
+        const cc = parseEmailAddresses(getHeaderValue(headers, "Cc"));
+        const bcc = parseEmailAddresses(getHeaderValue(headers, "Bcc"));
+        const messageSubject = getHeaderValue(headers, "Subject") || "(no subject)";
+        const date = new Date(parseInt(message.internalDate));
+        const inReplyTo = getHeaderValue(headers, "In-Reply-To") || null;
+        const references = parseEmailAddresses(getHeaderValue(headers, "References"));
+
+        // Extract content including attachments
+        const { html, text, attachments } = extractEmailContent(message);
+
+        // Prepare S3 upload task
+        let htmlS3Key: string | null = null;
+        if (html) {
+          htmlS3Key = S3_PATHS.MESSAGE_HTML(this.userId, message.id);
+          s3UploadTasks.push({
+            key: htmlS3Key,
+            content: html,
+            contentType: "text/html",
+          });
+        }
+
+        const messageData = {
+          gmailMessageId: message.id,
+          gmailThreadId: message.threadId,
+          from,
+          to,
+          cc,
+          bcc,
+          subject: messageSubject,
+          snippet: message.snippet,
+          date,
+          htmlS3Key,
+          textContent: text,
+          inReplyTo,
+          references,
+          labelIds: message.labelIds || [],
+        };
+
+        messagesToCreate.push(messageData);
+
+        // Collect attachments for processing
+        for (const attachment of attachments) {
+          attachmentsToProcess.push({
+            gmailMessageId: message.id,
+            attachment,
+          });
+        }
+      }
+    }
+
+    console.log(`📊 Prepared ${threadsToCreate.length} threads, ${messagesToCreate.length} messages, and ${attachmentsToProcess.length} attachments for bulk processing`);
+
+    // Step 3: Bulk database operations
+    const bulkStart = Date.now();
+    
+    // Insert threads with upsert behavior
+    const createdThreads = [];
+    for (const threadData of threadsToCreate) {
+      const thread = await db.thread.upsert({
+        where: {
+          userId_gmailThreadId: {
+            userId: threadData.userId,
+            gmailThreadId: threadData.gmailThreadId,
+          },
+        },
+        update: {
+          subject: threadData.subject,
+          snippet: threadData.snippet,
+          lastMessageDate: threadData.lastMessageDate,
+          unread: threadData.unread,
+          starred: threadData.starred,
+          important: threadData.important,
+          messageCount: threadData.messageCount,
+        },
+        create: threadData,
+      });
+      createdThreads.push(thread);
+    }
+
+    // Map thread IDs for messages
+    const threadIdMap = new Map();
+    for (let i = 0; i < validThreads.length; i++) {
+      threadIdMap.set(validThreads[i].id, createdThreads[i].id);
+    }
+
+    // Add thread IDs to messages
+    const messagesWithThreadIds = messagesToCreate.map(msg => ({
+      ...msg,
+      threadId: threadIdMap.get(msg.gmailThreadId),
+    }));
+
+    // Bulk insert messages (will skip duplicates)
+    try {
+      await db.message.createMany({
+        data: messagesWithThreadIds,
+        skipDuplicates: true,
+      });
+    } catch (error) {
+      console.log("Some messages already exist, continuing...");
+    }
+
+    const bulkTime = Date.now() - bulkStart;
+    console.log(`💾 Bulk database operations completed in ${bulkTime}ms`);
+
+    // Step 4: Process attachments
+    if (attachmentsToProcess.length > 0) {
+      console.log(`📎 Processing ${attachmentsToProcess.length} attachments`);
+      
+      // Get message IDs for attachments
+      const messageIdMap = new Map();
+      const createdMessages = await db.message.findMany({
+        where: {
+          gmailMessageId: { in: messagesToCreate.map(m => m.gmailMessageId) },
+        },
+        select: { id: true, gmailMessageId: true },
+      });
+      
+      for (const msg of createdMessages) {
+        messageIdMap.set(msg.gmailMessageId, msg.id);
+      }
+
+      // Process attachments in smaller batches to avoid overwhelming Gmail API
+      const ATTACHMENT_BATCH_SIZE = 5;
+      for (let i = 0; i < attachmentsToProcess.length; i += ATTACHMENT_BATCH_SIZE) {
+        const batch = attachmentsToProcess.slice(i, i + ATTACHMENT_BATCH_SIZE);
+        
+        await Promise.all(batch.map(async (item) => {
+          const messageId = messageIdMap.get(item.gmailMessageId);
+          if (messageId) {
+            try {
+              await this.syncAttachment(messageId, item.gmailMessageId, item.attachment);
+            } catch (error) {
+              console.error(`Failed to sync attachment for message ${item.gmailMessageId}:`, error);
+            }
+          }
+        }));
+      }
+      
+      console.log(`✅ Attachments processing completed`);
+    }
+
+    // Step 5: Sync thread labels (needed for Inbox filtering)
+    console.log(`🏷️ Syncing thread labels for ${createdThreads.length} threads`);
+    for (let i = 0; i < validThreads.length; i++) {
+      const threadData = validThreads[i];
+      const thread = createdThreads[i];
+      
+      if (threadData.messages && threadData.messages.length > 0) {
+        const lastMessage = threadData.messages[threadData.messages.length - 1] as GmailMessage;
+        const labelIds = lastMessage.labelIds || [];
+        
+        try {
+          await this.syncThreadLabels(thread.id, labelIds);
+        } catch (error) {
+          console.error(`Failed to sync labels for thread ${thread.id}:`, error);
+        }
+      }
+    }
+    console.log(`✅ Thread labels synced`);
+
+    // Step 6: Batch S3 uploads
+    if (s3UploadTasks.length > 0) {
+      console.log(`☁️ Starting ${s3UploadTasks.length} S3 uploads in batches`);
+      const S3_BATCH_SIZE = 10;
+      
+      for (let i = 0; i < s3UploadTasks.length; i += S3_BATCH_SIZE) {
+        const batch = s3UploadTasks.slice(i, i + S3_BATCH_SIZE);
+        const uploadPromises = batch.map(task => 
+          uploadToS3(task.key, task.content, task.contentType).catch(error => {
+            console.error(`S3 upload failed for ${task.key}:`, error);
+          })
+        );
+        await Promise.all(uploadPromises);
+      }
+      
+      console.log(`☁️ S3 uploads completed`);
+    }
+
+    return { processedCount: validThreads.length };
+  }
+
   private async completeSyncJob(status: JobStatus, error?: string): Promise<void> {
     if (!this.syncJobId) return;
 
@@ -280,9 +634,9 @@ export class GmailSyncService {
         },
       });
 
-      // Sync all messages in the thread
+      // Sync all messages in the thread including attachments
       for (const message of threadData.messages as GmailMessage[]) {
-        await this.syncMessage(message, thread.id);
+        await this.syncMessage(message, thread.id, false); // skipAttachments = false
       }
 
       // Sync thread labels
@@ -296,7 +650,7 @@ export class GmailSyncService {
     }
   }
 
-  private async syncMessage(message: GmailMessage, threadId: string): Promise<void> {
+  private async syncMessage(message: GmailMessage, threadId: string, skipAttachments = false): Promise<void> {
     const headers = message.payload.headers;
     const from = getHeaderValue(headers, "From");
     const to = parseEmailAddresses(getHeaderValue(headers, "To"));
@@ -347,9 +701,11 @@ export class GmailSyncService {
       },
     });
 
-    // Sync attachments
-    for (const attachment of attachments) {
-      await this.syncAttachment(savedMessage.id, message.id, attachment);
+    // Sync attachments (skip for initial sync speed)
+    if (!skipAttachments) {
+      for (const attachment of attachments) {
+        await this.syncAttachment(savedMessage.id, message.id, attachment);
+      }
     }
   }
 

@@ -23,6 +23,28 @@ export const gmailRouter = createTRPCRouter({
       return { success: true, message: "Sync started" };
     }),
 
+  syncBatch: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      const syncService = await GmailSyncService.create(ctx.session.user.id);
+      if (!syncService) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Gmail not connected. Please reconnect your account.",
+        });
+      }
+
+      try {
+        const result = await syncService.syncBatch();
+        return result;
+      } catch (error) {
+        console.error("Batch sync failed:", error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: error instanceof Error ? error.message : "Sync failed",
+        });
+      }
+    }),
+
   getSyncStatus: protectedProcedure
     .query(async ({ ctx }) => {
       const user = await ctx.db.user.findUnique({

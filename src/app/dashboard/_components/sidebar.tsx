@@ -28,10 +28,39 @@ export function Sidebar() {
   const pathname = usePathname();
   const { data: labels } = api.gmail.getLabels.useQuery();
   const syncMailbox = api.gmail.syncMailbox.useMutation();
+  const syncBatch = api.gmail.syncBatch.useMutation();
   const { data: syncStatus } = api.gmail.getSyncStatus.useQuery();
 
-  const handleSync = () => {
-    syncMailbox.mutate();
+  const handleSync = async () => {
+    try {
+      let completed = false;
+      let attempt = 0;
+      const maxAttempts = 100; // Prevent infinite loops
+      
+      while (!completed && attempt < maxAttempts) {
+        console.log(`Starting batch sync attempt ${attempt + 1}`);
+        
+        const result = await syncBatch.mutateAsync();
+        completed = result.completed;
+        
+        console.log(`Batch ${attempt + 1} completed: ${result.processedItems}/${result.totalItems} (${result.progress}%)`);
+        
+        if (!completed) {
+          // Wait 2 seconds between batches to let DB connections close
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        
+        attempt++;
+      }
+      
+      if (completed) {
+        console.log("✅ Full sync completed successfully!");
+      } else {
+        console.log("⚠️ Sync stopped after maximum attempts");
+      }
+    } catch (error) {
+      console.error("Sync error:", error);
+    }
   };
 
   const userLabels = labels?.filter(label => label.type === "USER") ?? [];
@@ -56,16 +85,18 @@ export function Sidebar() {
       <div className="p-4">
         <button
           onClick={handleSync}
-          disabled={syncMailbox.isPending || syncStatus?.currentJob?.status === "RUNNING"}
+          disabled={syncBatch.isPending || syncStatus?.currentJob?.status === "RUNNING"}
           className="raycast-button primary w-full gap-2"
         >
           <RefreshCwIcon className={cn(
             "w-4 h-4",
-            (syncMailbox.isPending || syncStatus?.currentJob?.status === "RUNNING") && "animate-spin"
+            (syncBatch.isPending || syncStatus?.currentJob?.status === "RUNNING") && "animate-spin"
           )} />
           {syncStatus?.currentJob?.status === "RUNNING" 
             ? `Syncing... ${Math.round(syncStatus.currentJob.progress)}%`
-            : "Sync Mail"
+            : syncBatch.isPending 
+              ? "Syncing..."
+              : "Sync Mail"
           }
         </button>
       </div>
