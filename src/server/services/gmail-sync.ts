@@ -35,35 +35,17 @@ export class GmailSyncService {
     return new GmailSyncService(gmail, userId);
   }
 
-  async syncMailbox(syncType: SyncType = "FULL", resumeFromJobId?: string): Promise<void> {
+  async syncMailbox(syncType: SyncType = "FULL"): Promise<void> {
     try {
-      let syncJob;
-      let isResuming = false;
-      
-      if (resumeFromJobId) {
-        // Resume existing job
-        syncJob = await db.syncJob.findUnique({
-          where: { id: resumeFromJobId },
-        });
-        
-        if (!syncJob || syncJob.status !== "RUNNING") {
-          throw new Error("Invalid or completed sync job for resume");
-        }
-        
-        this.syncJobId = syncJob.id;
-        isResuming = true;
-        console.log(`📂 Resuming sync job ${syncJob.id} from page token: ${syncJob.nextPageToken ? 'yes' : 'start'}`);
-      } else {
-        // Create new sync job
-        syncJob = await db.syncJob.create({
-          data: {
-            userId: this.userId,
-            status: "RUNNING",
-            type: syncType,
-          },
-        });
-        this.syncJobId = syncJob.id;
-      }
+      // Create sync job
+      const syncJob = await db.syncJob.create({
+        data: {
+          userId: this.userId,
+          status: "RUNNING",
+          type: syncType,
+        },
+      });
+      this.syncJobId = syncJob.id;
 
       // Update user sync status and show initial progress
       await db.user.update({
@@ -72,20 +54,16 @@ export class GmailSyncService {
       });
 
       // Show 1% progress immediately for production visibility
-      if (!isResuming) {
-        await this.updateSyncProgress(1, 100);
+      await this.updateSyncProgress(1, 100);
 
-        // Sync labels first (skip if resuming)
-        await this.syncLabels();
-        
-        // Show 3% progress after labels
-        await this.updateSyncProgress(3, 100);
-      }
+      // Sync labels first
+      await this.syncLabels();
+      
+      // Show 3% progress after labels
+      await this.updateSyncProgress(3, 100);
 
-      // Sync threads (will resume from saved state if applicable)
-      console.log("📋 Starting thread sync phase");
-      await this.syncThreads(isResuming ? syncJob : null);
-      console.log("📋 Thread sync phase completed");
+      // Sync threads
+      await this.syncThreads();
 
       // Mark sync as completed
       console.log("🏁 Marking sync job as completed");
@@ -133,7 +111,6 @@ export class GmailSyncService {
         status,
         completedAt: new Date(),
         progress: status === "COMPLETED" ? 100 : undefined,
-        nextPageToken: null, // Clear token when job completes
         error,
       },
     });
@@ -188,22 +165,14 @@ export class GmailSyncService {
     }
   }
 
-  private async syncThreads(resumeFromJob?: any): Promise<void> {
+  private async syncThreads(): Promise<void> {
     let pageToken: string | undefined;
     let totalThreads = 0;
     let processedThreads = 0;
     const startTime = Date.now();
     const PRODUCTION_TIMEOUT = 280000; // 280 seconds - safe margin for 300s Vercel limit
 
-    // Resume from saved state if available
-    if (resumeFromJob?.nextPageToken) {
-      pageToken = resumeFromJob.nextPageToken;
-      processedThreads = resumeFromJob.processedItems || 0;
-      totalThreads = resumeFromJob.totalItems || 0;
-      console.log(`🔄 Resuming thread sync from page token, already processed: ${processedThreads}/${totalThreads}`);
-    } else {
-      console.log("🔄 Starting thread sync...");
-    }
+    console.log("🔄 Starting thread sync...");
 
     do {
       // Check timeout before each page (only in production)
@@ -212,14 +181,6 @@ export class GmailSyncService {
         if (elapsedTime > PRODUCTION_TIMEOUT) {
           console.log(`⏰ PRODUCTION TIMEOUT: Processed ${processedThreads}/${totalThreads} threads in ${elapsedTime}ms`);
           console.log(`💾 Saving progress and exiting gracefully`);
-          
-          // Schedule continuation if there's more work
-          if (pageToken && this.syncJobId) {
-            console.log(`🔄 Scheduling automatic continuation...`);
-            // In production, you could trigger a webhook or use a job queue here
-            // For now, we'll just exit and let the user manually continue
-          }
-          
           return; // Exit gracefully before Vercel kills us
         }
       }
@@ -258,20 +219,6 @@ export class GmailSyncService {
       }
 
       pageToken = response.data.nextPageToken ?? undefined;
-      
-      // Save progress after each page for resumability
-      if (this.syncJobId) {
-        await db.syncJob.update({
-          where: { id: this.syncJobId },
-          data: {
-            nextPageToken: pageToken || null,
-            processedItems: processedThreads,
-            totalItems: totalThreads,
-            progress: Math.round((processedThreads / totalThreads) * 100),
-          },
-        });
-        console.log(`💾 Saved sync progress: ${processedThreads}/${totalThreads} threads, nextPageToken: ${pageToken ? 'yes' : 'complete'}`);
-      }
     } while (pageToken);
     
     const totalElapsed = Date.now() - startTime;

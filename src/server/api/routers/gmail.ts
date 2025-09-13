@@ -9,15 +9,6 @@ import { TRPCError } from "@trpc/server";
 export const gmailRouter = createTRPCRouter({
   syncMailbox: protectedProcedure
     .mutation(async ({ ctx }) => {
-      // Check for incomplete sync job
-      const incompleteSync = await ctx.db.syncJob.findFirst({
-        where: {
-          userId: ctx.session.user.id,
-          status: "RUNNING",
-        },
-        orderBy: { startedAt: "desc" },
-      });
-
       const syncService = await GmailSyncService.create(ctx.session.user.id);
       if (!syncService) {
         throw new TRPCError({
@@ -26,16 +17,10 @@ export const gmailRouter = createTRPCRouter({
         });
       }
 
-      if (incompleteSync) {
-        // Resume incomplete sync
-        console.log(`Resuming incomplete sync job ${incompleteSync.id}`);
-        void syncService.syncMailbox(incompleteSync.type, incompleteSync.id);
-        return { success: true, message: "Sync resumed", syncJobId: incompleteSync.id };
-      } else {
-        // Start new sync
-        void syncService.syncMailbox();
-        return { success: true, message: "Sync started" };
-      }
+      // Start sync in background (in production, use a job queue)
+      void syncService.syncMailbox();
+
+      return { success: true, message: "Sync started" };
     }),
 
   getSyncStatus: protectedProcedure
