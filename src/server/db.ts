@@ -4,7 +4,7 @@ import { env } from "~/env";
 
 const createPrismaClient = () => {
   const productionUrl = env.NODE_ENV === "production" 
-    ? `${env.DATABASE_URL}?connection_limit=3&pool_timeout=20&connect_timeout=30`
+    ? `${env.DATABASE_URL}?connection_limit=3&pool_timeout=30&connect_timeout=30`
     : env.DATABASE_URL;
 
   return new PrismaClient({
