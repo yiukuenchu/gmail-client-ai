@@ -251,8 +251,10 @@ export class GmailSyncService {
       const lastMessage = messages[messages.length - 1];
       const firstMessage = messages[0];
       
-      const subject = getHeaderValue(lastMessage.payload.headers, "Subject") || 
-                     getHeaderValue(firstMessage.payload.headers, "Subject") || 
+      if (!lastMessage || !firstMessage) continue; // Skip if no valid messages
+      
+      const subject = getHeaderValue(lastMessage.payload?.headers, "Subject") || 
+                     getHeaderValue(firstMessage.payload?.headers, "Subject") || 
                      "(no subject)";
 
       const isUnread = lastMessage.labelIds?.includes("UNREAD") ?? false;
@@ -265,7 +267,7 @@ export class GmailSyncService {
         gmailThreadId: threadData.id!,
         subject,
         snippet: threadData.snippet || "",
-        lastMessageDate: new Date(parseInt(lastMessage.internalDate)),
+        lastMessageDate: new Date(parseInt(lastMessage.internalDate || "0")),
         unread: isUnread,
         starred: isStarred,
         important: isImportant,
@@ -274,13 +276,15 @@ export class GmailSyncService {
 
       // Prepare message data
       for (const message of messages) {
+        if (!message.payload?.headers || !message.id) continue; // Skip invalid messages
+        
         const headers = message.payload.headers;
         const from = getHeaderValue(headers, "From");
         const to = parseEmailAddresses(getHeaderValue(headers, "To"));
         const cc = parseEmailAddresses(getHeaderValue(headers, "Cc"));
         const bcc = parseEmailAddresses(getHeaderValue(headers, "Bcc"));
         const messageSubject = getHeaderValue(headers, "Subject") || "(no subject)";
-        const date = new Date(parseInt(message.internalDate));
+        const date = new Date(parseInt(message.internalDate || "0"));
         const inReplyTo = getHeaderValue(headers, "In-Reply-To") || null;
         const references = parseEmailAddresses(getHeaderValue(headers, "References"));
 
@@ -359,7 +363,11 @@ export class GmailSyncService {
     // Map thread IDs for messages
     const threadIdMap = new Map();
     for (let i = 0; i < validThreads.length; i++) {
-      threadIdMap.set(validThreads[i].id, createdThreads[i].id);
+      const validThread = validThreads[i];
+      const createdThread = createdThreads[i];
+      if (validThread?.id && createdThread?.id) {
+        threadIdMap.set(validThread.id, createdThread.id);
+      }
     }
 
     // Add thread IDs to messages
@@ -424,9 +432,9 @@ export class GmailSyncService {
       const threadData = validThreads[i];
       const thread = createdThreads[i];
       
-      if (threadData.messages && threadData.messages.length > 0) {
+      if (threadData?.messages && threadData.messages.length > 0 && thread?.id) {
         const lastMessage = threadData.messages[threadData.messages.length - 1] as GmailMessage;
-        const labelIds = lastMessage.labelIds || [];
+        const labelIds = lastMessage?.labelIds || [];
         
         try {
           await this.syncThreadLabels(thread.id, labelIds);
