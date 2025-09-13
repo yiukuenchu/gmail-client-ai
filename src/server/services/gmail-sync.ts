@@ -440,23 +440,9 @@ export class GmailSyncService {
       console.log(`✅ Attachments processing completed`);
     }
 
-    // Step 5: Sync thread labels (needed for Inbox filtering)
-    console.log(`🏷️ Syncing thread labels for ${createdThreads.length} threads`);
-    for (let i = 0; i < validThreads.length; i++) {
-      const threadData = validThreads[i];
-      const thread = createdThreads[i];
-      
-      if (threadData?.messages && threadData.messages.length > 0 && thread?.id) {
-        const lastMessage = threadData.messages[threadData.messages.length - 1] as GmailMessage;
-        const labelIds = lastMessage?.labelIds || [];
-        
-        try {
-          await this.syncThreadLabels(thread.id, labelIds);
-        } catch (error) {
-          console.error(`Failed to sync labels for thread ${thread.id}:`, error);
-        }
-      }
-    }
+    // Step 5: Bulk sync thread labels (needed for Inbox filtering)
+    console.log(`🏷️ Bulk syncing thread labels for ${createdThreads.length} threads`);
+    await this.syncThreadLabelsBulk(validThreads, createdThreads);
     console.log(`✅ Thread labels synced`);
 
     // Step 6: Batch S3 uploads
@@ -478,6 +464,77 @@ export class GmailSyncService {
     }
 
     return { processedCount: validThreads.length };
+  }
+
+  private async syncThreadLabelsBulk(validThreads: any[], createdThreads: any[]): Promise<void> {
+    // Step 1: Collect all thread IDs and their label data
+    const threadLabelData: Array<{ threadId: string; labelIds: string[] }> = [];
+    const allThreadIds: string[] = [];
+
+    for (let i = 0; i < validThreads.length; i++) {
+      const threadData = validThreads[i];
+      const thread = createdThreads[i];
+      
+      if (threadData?.messages && threadData.messages.length > 0 && thread?.id) {
+        const lastMessage = threadData.messages[threadData.messages.length - 1] as GmailMessage;
+        const labelIds = lastMessage?.labelIds || [];
+        
+        threadLabelData.push({
+          threadId: thread.id,
+          labelIds: labelIds,
+        });
+        allThreadIds.push(thread.id);
+      }
+    }
+
+    if (threadLabelData.length === 0) return;
+
+    // Step 2: Bulk delete existing label associations
+    console.log(`🗑️ Removing existing label associations for ${allThreadIds.length} threads`);
+    await db.labelThread.deleteMany({
+      where: {
+        threadId: { in: allThreadIds },
+      },
+    });
+
+    // Step 3: Get all unique Gmail label IDs and fetch corresponding database labels
+    const allLabelIds = [...new Set(threadLabelData.flatMap(item => item.labelIds))];
+    console.log(`📋 Looking up ${allLabelIds.length} unique labels`);
+    
+    const labels = await db.label.findMany({
+      where: {
+        userId: this.userId,
+        gmailLabelId: { in: allLabelIds },
+      },
+      select: { id: true, gmailLabelId: true },
+    });
+
+    // Create a map for quick label lookup
+    const labelMap = new Map(labels.map(label => [label.gmailLabelId, label.id]));
+
+    // Step 4: Prepare bulk labelThread data
+    const labelThreadsToCreate: Array<{ labelId: string; threadId: string }> = [];
+    
+    for (const threadData of threadLabelData) {
+      for (const gmailLabelId of threadData.labelIds) {
+        const labelId = labelMap.get(gmailLabelId);
+        if (labelId) {
+          labelThreadsToCreate.push({
+            labelId: labelId,
+            threadId: threadData.threadId,
+          });
+        }
+      }
+    }
+
+    // Step 5: Bulk create label-thread associations
+    if (labelThreadsToCreate.length > 0) {
+      console.log(`🔗 Creating ${labelThreadsToCreate.length} label-thread associations`);
+      await db.labelThread.createMany({
+        data: labelThreadsToCreate,
+        skipDuplicates: true,
+      });
+    }
   }
 
   private async completeSyncJob(status: JobStatus, error?: string): Promise<void> {
