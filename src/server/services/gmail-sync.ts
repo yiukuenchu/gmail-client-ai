@@ -168,22 +168,10 @@ export class GmailSyncService {
     let pageToken: string | undefined;
     let totalThreads = 0;
     let processedThreads = 0;
-    const startTime = Date.now();
-    const PRODUCTION_TIMEOUT = 280000; // 280 seconds - safe margin for 300s Vercel limit
 
     console.log("🔄 Starting thread sync...");
 
     do {
-      // Check timeout before each page (only in production)
-      if (process.env.NODE_ENV === 'production') {
-        const elapsedTime = Date.now() - startTime;
-        if (elapsedTime > PRODUCTION_TIMEOUT) {
-          console.log(`⏰ PRODUCTION TIMEOUT: Processed ${processedThreads}/${totalThreads} threads in ${elapsedTime}ms`);
-          console.log(`💾 Saving progress and exiting gracefully`);
-          return; // Exit gracefully before Vercel kills us
-        }
-      }
-
       // Fetch threads page
       const response = await this.gmail.users.threads.list({
         userId: "me",
