@@ -189,11 +189,25 @@ export class GmailSyncService {
 
     const progress = estimatedTotal > 0 ? Math.round((newProcessedItems / estimatedTotal) * 100) : 0;
     const totalElapsed = Date.now() - startTime;
+    const isCompleted = !threads.nextPageToken;
     
     console.log(`📊 Batch completed: ${processedInBatch} threads processed in ${totalElapsed}ms (${progress}% total progress)`);
     
+    // If this is the final batch (no more pageToken), complete the sync
+    if (isCompleted) {
+      console.log(`🏁 Final batch completed, completing sync job`);
+      await this.completeSyncJob("COMPLETED");
+      await db.user.update({
+        where: { id: this.userId },
+        data: { 
+          syncStatus: "COMPLETED",
+          lastSyncedAt: new Date(),
+        },
+      });
+    }
+    
     return {
-      completed: !threads.nextPageToken,
+      completed: isCompleted,
       progress: Math.min(progress, 100),
       processedItems: newProcessedItems,
       totalItems: estimatedTotal,
