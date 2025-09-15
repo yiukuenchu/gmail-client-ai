@@ -246,11 +246,7 @@ export function ThreadList({ labelId, unreadOnly, search, advancedSearch, showMe
                   <div className="flex items-center gap-2 mb-1">
                     <span 
                       className="truncate font-medium text-sm"
-                      style={{ 
-                        color: thread.unread 
-                          ? 'var(--color-raycast-text)' 
-                          : 'var(--color-raycast-text-secondary)' 
-                      }}
+                      style={{ color: '#000000' }}
                     >
                       {fromName}
                     </span>
@@ -267,7 +263,7 @@ export function ThreadList({ labelId, unreadOnly, search, advancedSearch, showMe
                     )}
                   </div>
                   <div 
-                    className="text-sm truncate mb-1 font-medium"
+                    className="text-sm truncate mb-1 font-normal"
                     style={{ 
                       color: thread.unread 
                         ? 'var(--color-raycast-text)' 
