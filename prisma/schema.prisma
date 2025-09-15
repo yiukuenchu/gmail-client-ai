@@ -84,7 +84,11 @@ model Thread {
     @@unique([userId, gmailThreadId])
     @@index([userId, lastMessageDate])
     @@index([userId, unread])
+    @@index([userId, starred])
+    @@index([userId, important])
+    @@index([userId, messageCount])
     @@index([subject])
+    @@index([snippet])
 }
 
 model Message {
@@ -113,6 +117,9 @@ model Message {
     @@index([threadId])
     @@index([from])
     @@index([date])
+    @@index([subject])
+    @@index([snippet])
+    @@index([threadId, date])
 }
 
 model Attachment {
@@ -128,6 +135,7 @@ model Attachment {
     message          Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
     @@index([messageId])
+    @@index([filename])
 }
 
 model Label {

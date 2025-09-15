@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { SearchIcon, UserCircleIcon, LogOutIcon } from "lucide-react";
+import { SearchIcon, UserCircleIcon, LogOutIcon, FilterIcon } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { useSession } from "next-auth/react";
+import { AdvancedSearch } from "./advanced-search";
 
 export function Header() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
   const router = useRouter();
   const { data: session } = useSession();
 
@@ -29,18 +31,27 @@ export function Header() {
             Gmail
           </h1>
           
-          <form onSubmit={handleSearch} className="ml-8 flex-1 max-w-2xl">
-            <div className="raycast-search">
-              <SearchIcon className="raycast-search-icon w-5 h-5" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search mail"
-                className="raycast-search-input"
-              />
-            </div>
-          </form>
+          <div className="ml-8 flex-1 max-w-2xl flex items-center">
+            <form onSubmit={handleSearch} className="flex-1">
+              <div className="raycast-search" style={{ maxWidth: 'none' }}>
+                <SearchIcon className="raycast-search-icon w-5 h-5" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search mail"
+                  className="raycast-search-input"
+                />
+              </div>
+            </form>
+            <button
+              onClick={() => setShowAdvancedSearch(true)}
+              className="raycast-button p-2 ml-2"
+              title="Advanced Search"
+            >
+              <FilterIcon className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-4">
@@ -70,6 +81,12 @@ export function Header() {
           </button>
         </div>
       </div>
+      
+      <AdvancedSearch
+        isOpen={showAdvancedSearch}
+        onClose={() => setShowAdvancedSearch(false)}
+        initialQuery={searchQuery}
+      />
     </header>
   );
 }

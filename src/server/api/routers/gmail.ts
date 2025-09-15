@@ -84,9 +84,163 @@ export const gmailRouter = createTRPCRouter({
       labelId: z.string().optional(),
       unreadOnly: z.boolean().default(false),
       search: z.string().optional(),
+      // Advanced search filters
+      advancedSearch: z.object({
+        // Text search fields
+        subject: z.string().optional(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        content: z.string().optional(), // Full message text
+        attachmentName: z.string().optional(),
+        
+        // Date filters
+        dateAfter: z.date().optional(),
+        dateBefore: z.date().optional(),
+        dateRange: z.enum(['today', 'yesterday', 'lastWeek', 'lastMonth', 'lastYear']).optional(),
+        
+        // Status filters
+        hasAttachments: z.boolean().optional(),
+        isStarred: z.boolean().optional(),
+        isImportant: z.boolean().optional(),
+        isUnread: z.boolean().optional(),
+        
+      }).optional(),
     }))
     .query(async ({ ctx, input }) => {
       let labelCondition = {};
+      let searchConditions: any[] = [];
+      
+      // Helper function to build date range conditions
+      const buildDateCondition = (advancedSearch: any) => {
+        let dateCondition: any = {};
+        
+        if (advancedSearch.dateAfter) {
+          dateCondition.gte = advancedSearch.dateAfter;
+        }
+        
+        if (advancedSearch.dateBefore) {
+          dateCondition.lte = advancedSearch.dateBefore;
+        }
+        
+        if (advancedSearch.dateRange) {
+          const now = new Date();
+          let startDate: Date;
+          
+          switch (advancedSearch.dateRange) {
+            case 'today':
+              startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+              break;
+            case 'yesterday':
+              startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+              dateCondition.lte = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+              break;
+            case 'lastWeek':
+              startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+              break;
+            case 'lastMonth':
+              startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+              break;
+            case 'lastYear':
+              startDate = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+              break;
+            default:
+              startDate = now;
+          }
+          dateCondition.gte = startDate;
+        }
+        
+        return Object.keys(dateCondition).length > 0 ? { lastMessageDate: dateCondition } : {};
+      };
+      
+      // Handle advanced search
+      if (input.advancedSearch) {
+        const adv = input.advancedSearch;
+        
+        // Text search conditions
+        const textConditions: any[] = [];
+        
+        if (adv.subject) {
+          textConditions.push({ subject: { contains: adv.subject, mode: "insensitive" } });
+        }
+        
+        if (adv.from) {
+          textConditions.push({
+            messages: {
+              some: { from: { contains: adv.from, mode: "insensitive" } }
+            }
+          });
+        }
+        
+        if (adv.to) {
+          textConditions.push({
+            messages: {
+              some: {
+                OR: [
+                  { to: { hasSome: [adv.to] } },
+                  { cc: { hasSome: [adv.to] } },
+                  { bcc: { hasSome: [adv.to] } },
+                ]
+              }
+            }
+          });
+        }
+        
+        if (adv.content) {
+          textConditions.push({
+            messages: {
+              some: { textContent: { contains: adv.content, mode: "insensitive" } }
+            }
+          });
+        }
+        
+        if (adv.attachmentName) {
+          textConditions.push({
+            messages: {
+              some: {
+                attachments: {
+                  some: { filename: { contains: adv.attachmentName, mode: "insensitive" } }
+                }
+              }
+            }
+          });
+        }
+        
+        // Add text conditions (using OR logic by default)
+        if (textConditions.length > 0) {
+          searchConditions.push({ OR: textConditions });
+        }
+        
+        // Date conditions
+        const dateCondition = buildDateCondition(adv);
+        if (Object.keys(dateCondition).length > 0) {
+          searchConditions.push(dateCondition);
+        }
+        
+        // Status conditions
+        if (adv.hasAttachments !== undefined) {
+          if (adv.hasAttachments) {
+            searchConditions.push({
+              messages: { some: { attachments: { some: {} } } }
+            });
+          } else {
+            searchConditions.push({
+              messages: { none: { attachments: { some: {} } } }
+            });
+          }
+        }
+        
+        if (adv.isStarred !== undefined) {
+          searchConditions.push({ starred: adv.isStarred });
+        }
+        
+        if (adv.isImportant !== undefined) {
+          searchConditions.push({ important: adv.isImportant });
+        }
+        
+        if (adv.isUnread !== undefined) {
+          searchConditions.push({ unread: adv.isUnread });
+        }
+      }
       
       // Handle special Gmail system labels
       if (input.labelId) {
@@ -148,17 +302,27 @@ export const gmailRouter = createTRPCRouter({
         }
       }
 
-      const where = {
+      // Build final where conditions
+      const baseConditions: any = {
         userId: ctx.session.user.id,
         ...(input.unreadOnly && { unread: true }),
-        ...(input.search && {
+        ...labelCondition,
+      };
+      
+      // Handle simple search (backward compatibility)
+      if (input.search && !input.advancedSearch) {
+        searchConditions.push({
           OR: [
             { subject: { contains: input.search, mode: "insensitive" as const } },
             { snippet: { contains: input.search, mode: "insensitive" as const } },
           ],
-        }),
-        ...labelCondition,
-      };
+        });
+      }
+      
+      // Combine all conditions
+      const where = searchConditions.length > 0 
+        ? { ...baseConditions, AND: searchConditions }
+        : baseConditions;
 
       const threads = await ctx.db.thread.findMany({
         where,
@@ -166,6 +330,13 @@ export const gmailRouter = createTRPCRouter({
           messages: {
             select: {
               from: true,
+              to: true,
+              cc: true,
+              date: true,
+              subject: true,
+              snippet: true,
+              // Include textContent for search but limit size for performance
+              textContent: input.advancedSearch?.content ? true : false,
             },
             orderBy: { date: "desc" },
             take: 1,

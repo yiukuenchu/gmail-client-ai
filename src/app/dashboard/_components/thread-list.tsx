@@ -13,10 +13,11 @@ interface ThreadListProps {
   labelId?: string;
   unreadOnly?: boolean;
   search?: string;
+  advancedSearch?: any;
   showMetrics?: boolean;
 }
 
-export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }: ThreadListProps) {
+export function ThreadList({ labelId, unreadOnly, search, advancedSearch, showMetrics = false }: ThreadListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -32,6 +33,7 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
       labelId,
       unreadOnly,
       search,
+      advancedSearch,
     },
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor,
@@ -94,20 +96,20 @@ export function ThreadList({ labelId, unreadOnly, search, showMetrics = false }:
 
       // Update current view cache
       utils.gmail.getThreads.setInfiniteData(
-        { labelId, unreadOnly, search },
+        { labelId, unreadOnly, search, advancedSearch },
         updateCache
       );
 
       // Update starred page cache specifically
       utils.gmail.getThreads.setInfiniteData(
-        { labelId: "STARRED", unreadOnly: false, search: undefined },
+        { labelId: "STARRED", unreadOnly: false, search: undefined, advancedSearch: undefined },
         updateCache
       );
 
       // Update inbox cache if different
       if (labelId !== undefined) {
         utils.gmail.getThreads.setInfiniteData(
-          { labelId: undefined, unreadOnly: false, search: undefined },
+          { labelId: undefined, unreadOnly: false, search: undefined, advancedSearch: undefined },
           updateCache
         );
       }
