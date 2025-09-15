@@ -12,6 +12,7 @@ import {
   TagIcon,
   RefreshCwIcon,
   MailIcon,
+  PenToolIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
 
@@ -82,7 +83,7 @@ export function Sidebar() {
       backgroundColor: 'var(--color-raycast-surface)', 
       borderRight: '1px solid var(--color-raycast-border-light)' 
     }}>
-      <div className="p-4">
+      <div className="p-4 space-y-3">
         <button
           onClick={handleSync}
           disabled={syncBatch.isPending || syncStatus?.currentJob?.status === "RUNNING"}
@@ -99,6 +100,13 @@ export function Sidebar() {
               : "Sync Mail"
           }
         </button>
+        
+        <Link href="/dashboard/compose" className="block">
+          <button className="w-full px-4 py-3 rounded-lg font-medium text-white transition-all hover:shadow-md flex items-center justify-center gap-2" style={{ backgroundColor: '#ea4335' }}>
+            <PenToolIcon className="w-4 h-4" />
+            Compose
+          </button>
+        </Link>
       </div>
 
       <nav className="flex-1 px-3 pb-4 space-y-1 overflow-y-auto min-h-0">

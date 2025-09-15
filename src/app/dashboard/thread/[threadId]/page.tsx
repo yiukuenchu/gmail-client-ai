@@ -1,16 +1,19 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
+import { useRef } from "react";
 import { api } from "~/trpc/react";
 import { MessageView } from "../../_components/message-view";
-import { ComposeReply } from "../../_components/compose-reply";
+import { ComposeReply, type ComposeReplyHandle } from "../../_components/compose-reply";
 import { ArrowLeftIcon, StarIcon, TrashIcon, ArchiveIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
+import type { Message } from "@prisma/client";
 
 export default function ThreadPage() {
   const params = useParams();
   const router = useRouter();
   const threadId = params.threadId as string;
+  const composeReplyRef = useRef<ComposeReplyHandle>(null);
 
   const { data: thread, isLoading, error } = api.gmail.getThread.useQuery({ threadId });
   const utils = api.useUtils();
@@ -64,6 +67,29 @@ export default function ThreadPage() {
     toggleStar.mutate({ threadId: thread.id, starred: !thread.starred });
   };
 
+  const handleReply = (message: Message) => {
+    composeReplyRef.current?.startReply(message);
+  };
+
+  const handleForward = (message: Message) => {
+    // Navigate to compose page with forward parameters
+    const forwardData = {
+      type: 'forward',
+      originalSubject: message.subject,
+      originalFrom: message.from,
+      originalDate: message.date.toISOString(),
+      originalContent: message.snippet, // We'll get full content in the compose page
+      originalMessageId: message.id,
+    };
+    
+    const params = new URLSearchParams();
+    Object.entries(forwardData).forEach(([key, value]) => {
+      params.set(key, value.toString());
+    });
+    
+    router.push(`/dashboard/compose?${params.toString()}`);
+  };
+
   return (
     <div className="h-full flex flex-col bg-gray-50">
       {/* Thread Header */}
@@ -72,7 +98,7 @@ export default function ThreadPage() {
           <div className="flex items-center gap-4">
             <button
               onClick={() => router.back()}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              className="raycast-button p-2"
               title="Back"
             >
               <ArrowLeftIcon className="w-5 h-5" />
@@ -132,13 +158,15 @@ export default function ThreadPage() {
             key={message.id}
             message={message}
             isExpanded={index === thread.messages.length - 1}
+            onForward={handleForward}
+            onReply={handleReply}
           />
         ))}
       </div>
 
       {/* Reply Composer */}
       <div className="border-t bg-white">
-        <ComposeReply threadId={thread.id} />
+        <ComposeReply ref={composeReplyRef} threadId={thread.id} />
       </div>
     </div>
   );

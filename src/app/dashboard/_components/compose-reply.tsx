@@ -1,24 +1,49 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, forwardRef, useImperativeHandle } from "react";
 import { api } from "~/trpc/react";
 import { SendIcon, PaperclipIcon, SparklesIcon, XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
+import type { Message } from "@prisma/client";
 
 interface ComposeReplyProps {
   threadId: string;
 }
 
-export function ComposeReply({ threadId }: ComposeReplyProps) {
+export interface ComposeReplyHandle {
+  startReply: (message: Message) => void;
+}
+
+export const ComposeReply = forwardRef<ComposeReplyHandle, ComposeReplyProps>(({ threadId }, ref) => {
   const [isComposing, setIsComposing] = useState(false);
   const [to, setTo] = useState("");
   const [cc, setCc] = useState("");
   const [subject, setSubject] = useState("");
   const [content, setContent] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [uploadedAttachments, setUploadedAttachments] = useState<{id: string, s3Key: string, filename: string}[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composeRef = useRef<HTMLDivElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    startReply: (message: Message) => {
+      setIsComposing(true);
+      setTo(message.from);
+      setSubject(message.subject.startsWith('Re: ') ? message.subject : `Re: ${message.subject}`);
+      setContent('');
+      
+      // Scroll to compose area after state updates
+      setTimeout(() => {
+        composeRef.current?.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'start' 
+        });
+      }, 100);
+    }
+  }));
 
   const utils = api.useUtils();
+  const uploadAttachment = api.gmail.uploadAttachment.useMutation();
   const sendReply = api.gmail.sendReply.useMutation({
     onSuccess: (data) => {
       // Invalidate all relevant caches to show the sent message immediately
@@ -40,13 +65,87 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
     if (!to.trim() || !content.trim()) return;
 
     try {
+      // Clean and validate email addresses
+      const cleanEmails = (emailStr: string) => {
+        return emailStr
+          .split(",")
+          .map(e => e.trim())
+          .filter(e => e.length > 0 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+      };
+
+      const toEmails = cleanEmails(to);
+      const ccEmails = cc ? cleanEmails(cc) : [];
+
+      if (toEmails.length === 0) {
+        throw new Error("Please enter at least one valid email address");
+      }
+
+      // Upload any pending attachments first
+      const attachmentKeys: string[] = [];
+      const attachmentMetadata: Array<{s3Key: string, filename: string, contentType: string, size: number}> = [];
+      
+      for (const file of attachments) {
+        // Check if already uploaded
+        const existingUpload = uploadedAttachments.find(u => u.filename === file.name);
+        if (existingUpload) {
+          attachmentKeys.push(existingUpload.s3Key);
+          attachmentMetadata.push({
+            s3Key: existingUpload.s3Key,
+            filename: file.name,
+            contentType: file.type || 'application/octet-stream',
+            size: file.size,
+          });
+          continue;
+        }
+
+        // Convert file to base64
+        const fileData = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            const base64 = result.split(',')[1]; // Remove data:type;base64, prefix
+            if (base64) {
+              resolve(base64);
+            } else {
+              reject(new Error('Failed to convert file to base64'));
+            }
+          };
+          reader.onerror = () => reject(new Error('Failed to read file'));
+          reader.readAsDataURL(file);
+        });
+
+        // Upload to S3
+        const uploadResult = await uploadAttachment.mutateAsync({
+          filename: file.name,
+          contentType: file.type || 'application/octet-stream',
+          fileData,
+          size: file.size,
+        });
+
+        attachmentKeys.push(uploadResult.s3Key);
+        attachmentMetadata.push({
+          s3Key: uploadResult.s3Key,
+          filename: uploadResult.filename,
+          contentType: uploadResult.contentType,
+          size: uploadResult.size,
+        });
+        
+        // Track uploaded attachment
+        setUploadedAttachments(prev => [...prev, {
+          id: uploadResult.attachmentId,
+          s3Key: uploadResult.s3Key,
+          filename: uploadResult.filename,
+        }]);
+      }
+
       await sendReply.mutateAsync({
         threadId,
-        to: to.split(",").map(e => e.trim()),
-        cc: cc ? cc.split(",").map(e => e.trim()) : [],
+        to: toEmails,
+        cc: ccEmails,
         subject,
         content,
-        attachmentKeys: [], // TODO: Upload attachments first
+        attachmentKeys,
+        attachments: attachmentMetadata,
       });
 
       // Reset form only after successful send
@@ -56,9 +155,10 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
       setSubject("");
       setContent("");
       setAttachments([]);
+      setUploadedAttachments([]);
     } catch (error) {
-      // Error is already handled by mutation onError callback
-      // Keep form open so user can retry
+      console.error("Send failed:", error);
+      alert(error instanceof Error ? error.message : "Failed to send email");
     }
   };
 
@@ -77,14 +177,29 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
   };
 
   const removeAttachment = (index: number) => {
+    const fileToRemove = attachments[index];
     setAttachments(prev => prev.filter((_, i) => i !== index));
+    
+    // Also remove from uploaded attachments if it was uploaded
+    if (fileToRemove) {
+      setUploadedAttachments(prev => prev.filter(u => u.filename !== fileToRemove.name));
+    }
   };
 
   if (!isComposing) {
     return (
-      <div className="p-6">
+      <div ref={composeRef} className="p-6">
         <button
-          onClick={() => setIsComposing(true)}
+          onClick={() => {
+            setIsComposing(true);
+            // Scroll to compose area when manually clicking
+            setTimeout(() => {
+              composeRef.current?.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'start' 
+              });
+            }, 100);
+          }}
           className="raycast-card w-full text-left px-4 py-3"
           style={{
             backgroundColor: 'var(--color-raycast-bg-tertiary)',
@@ -100,7 +215,7 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
   }
 
   return (
-    <div className="raycast-card m-6 p-6 space-y-4">
+    <div ref={composeRef} className="raycast-card m-6 p-6 space-y-4">
       <div className="space-y-3">
         <div className="flex gap-3 items-center">
           <label className="text-sm font-medium w-16" style={{ color: 'var(--color-raycast-text-secondary)' }}>
@@ -198,11 +313,11 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
         <div className="flex items-center gap-2">
           <button
             onClick={handleSend}
-            disabled={sendReply.isPending || !to.trim() || !content.trim()}
+            disabled={sendReply.isPending || uploadAttachment.isPending || !to.trim() || !content.trim()}
             className="raycast-button primary gap-2 disabled:opacity-50"
           >
             <SendIcon className="w-4 h-4" />
-            {sendReply.isPending ? "Sending..." : "Send"}
+            {uploadAttachment.isPending ? "Uploading..." : sendReply.isPending ? "Sending..." : "Send"}
           </button>
 
           <input
@@ -229,6 +344,7 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
             setSubject("");
             setContent("");
             setAttachments([]);
+            setUploadedAttachments([]);
           }}
           className="text-sm font-medium transition-colors"
           style={{ 
@@ -240,4 +356,6 @@ export function ComposeReply({ threadId }: ComposeReplyProps) {
       </div>
     </div>
   );
-}
+});
+
+ComposeReply.displayName = 'ComposeReply';

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { GmailSyncService } from "~/server/services/gmail-sync";
-import { getFromS3, getPresignedUrl } from "~/server/s3";
+import { getFromS3, getFromS3AsBuffer, getPresignedUrl, uploadToS3, S3_PATHS } from "~/server/s3";
 import { getGmailClient, getUserRefreshToken } from "~/server/gmail";
 import { env } from "~/env";
 import { TRPCError } from "@trpc/server";
@@ -535,34 +535,45 @@ export const gmailRouter = createTRPCRouter({
 
   sendReply: protectedProcedure
     .input(z.object({
-      threadId: z.string(),
-      to: z.array(z.string()),
-      cc: z.array(z.string()).default([]),
-      bcc: z.array(z.string()).default([]),
+      threadId: z.string().optional(), // Optional for new emails
+      to: z.array(z.string().email("Invalid email address")),
+      cc: z.array(z.string().email("Invalid email address")).default([]),
+      bcc: z.array(z.string().email("Invalid email address")).default([]),
       subject: z.string(),
       content: z.string(),
       attachmentKeys: z.array(z.string()).default([]),
+      attachments: z.array(z.object({
+        s3Key: z.string(),
+        filename: z.string(),
+        contentType: z.string(),
+        size: z.number(),
+      })).default([]),
     }))
     .mutation(async ({ ctx, input }) => {
-      // Get thread and last message for proper threading
-      const thread = await ctx.db.thread.findFirst({
-        where: {
-          id: input.threadId,
-          userId: ctx.session.user.id,
-        },
-        include: {
-          messages: {
-            orderBy: { date: "desc" },
-            take: 1,
+      const isNewEmail = !input.threadId || input.threadId === "";
+      
+      // Get thread and last message for proper threading (only for replies)
+      let thread = null;
+      if (!isNewEmail) {
+        thread = await ctx.db.thread.findFirst({
+          where: {
+            id: input.threadId,
+            userId: ctx.session.user.id,
           },
-        },
-      });
-
-      if (!thread) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Thread not found",
+          include: {
+            messages: {
+              orderBy: { date: "desc" },
+              take: 1,
+            },
+          },
         });
+
+        if (!thread) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Thread not found",
+          });
+        }
       }
 
       // Get refresh token
@@ -575,7 +586,7 @@ export const gmailRouter = createTRPCRouter({
       }
 
       const gmail = getGmailClient(refreshToken);
-      const lastMessage = thread.messages[0];
+      const lastMessage = thread?.messages[0];
       
       // Build email headers
       const messageId = `<${Date.now()}.${Math.random()}@gmail.com>`;
@@ -585,14 +596,127 @@ export const gmailRouter = createTRPCRouter({
       }
 
       const currentDate = new Date();
-      const subjectText = input.subject || `Re: ${thread.subject}`;
+      const subjectText = input.subject || (thread ? `Re: ${thread.subject}` : "(no subject)");
 
-      // 1. OPTIMISTIC UPDATE: Create sent message in database immediately
+      // Handle new emails - create a new thread first
+      if (isNewEmail) {
+        // For new emails, we'll create the thread after sending via Gmail API
+        // to get the proper Gmail thread ID
+      }
+
+      // 1. Prepare email with attachments
+      let email: string;
+      
+      if (input.attachmentKeys.length > 0) {
+        // Create multipart email with attachments
+        const boundary = `----=_NextPart_${Date.now()}_${Math.random().toString(36)}`;
+        
+        const headers = [
+          `Message-ID: ${messageId}`,
+          `From: ${ctx.session.user.email}`,
+          `To: ${input.to.join(", ")}`,
+          input.cc.length > 0 ? `Cc: ${input.cc.join(", ")}` : null,
+          input.bcc.length > 0 ? `Bcc: ${input.bcc.join(", ")}` : null,
+          `Subject: ${subjectText}`,
+          !isNewEmail && lastMessage ? `In-Reply-To: <${lastMessage.gmailMessageId}>` : null,
+          references.length > 0 ? `References: ${references.join(" ")}` : null,
+          `MIME-Version: 1.0`,
+          `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        ].filter(Boolean);
+
+        // Email body part
+        let emailBody = headers.join("\r\n") + "\r\n\r\n";
+        emailBody += `--${boundary}\r\n`;
+        emailBody += `Content-Type: text/plain; charset=utf-8\r\n`;
+        emailBody += `Content-Transfer-Encoding: 7bit\r\n\r\n`;
+        emailBody += input.content + "\r\n\r\n";
+
+        // Add attachments
+        for (const s3Key of input.attachmentKeys) {
+          try {
+            // Get attachment from S3
+            const attachmentBuffer = await getFromS3AsBuffer(s3Key);
+            if (attachmentBuffer) {
+              const filename = s3Key.split('/').pop() || 'attachment';
+              const base64Content = attachmentBuffer.toString('base64');
+              
+              emailBody += `--${boundary}\r\n`;
+              emailBody += `Content-Type: application/octet-stream\r\n`;
+              emailBody += `Content-Transfer-Encoding: base64\r\n`;
+              emailBody += `Content-Disposition: attachment; filename="${filename}"\r\n\r\n`;
+              emailBody += base64Content + "\r\n\r\n";
+            }
+          } catch (error) {
+            console.error(`Failed to attach file ${s3Key}:`, error);
+          }
+        }
+
+        emailBody += `--${boundary}--\r\n`;
+        email = emailBody;
+      } else {
+        // Simple text email
+        const headers = [
+          `Message-ID: ${messageId}`,
+          `From: ${ctx.session.user.email}`,
+          `To: ${input.to.join(", ")}`,
+          input.cc.length > 0 ? `Cc: ${input.cc.join(", ")}` : null,
+          input.bcc.length > 0 ? `Bcc: ${input.bcc.join(", ")}` : null,
+          `Subject: ${subjectText}`,
+          !isNewEmail && lastMessage ? `In-Reply-To: <${lastMessage.gmailMessageId}>` : null,
+          references.length > 0 ? `References: ${references.join(" ")}` : null,
+          `Content-Type: text/plain; charset=utf-8`,
+          `MIME-Version: 1.0`,
+        ].filter(Boolean);
+
+        email = headers.join("\r\n") + "\r\n\r\n" + input.content;
+      }
+
+      const encodedMessage = Buffer.from(email, 'utf-8')
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      const response = await gmail.users.messages.send({
+        userId: "me",
+        requestBody: {
+          raw: encodedMessage,
+          threadId: thread?.gmailThreadId, // Only set for replies
+        },
+      });
+
+      // 2. For new emails, create thread in database
+      if (isNewEmail) {
+        thread = await ctx.db.thread.create({
+          data: {
+            userId: ctx.session.user.id,
+            gmailThreadId: response.data.threadId!,
+            subject: subjectText,
+            snippet: input.content.substring(0, 100),
+            lastMessageDate: currentDate,
+            unread: false, // Sent emails are not unread
+            starred: false,
+            important: false,
+            messageCount: 1,
+          },
+        });
+      } else if (thread) {
+        // 3. Update thread's last message date and increment message count for replies
+        await ctx.db.thread.update({
+          where: { id: thread.id },
+          data: {
+            lastMessageDate: currentDate,
+            messageCount: { increment: 1 },
+          },
+        });
+      }
+
+      // 4. Create sent message in database
       const optimisticMessage = await ctx.db.message.create({
         data: {
-          threadId: thread.id,
-          gmailMessageId: `optimistic-${Date.now()}-${Math.random()}`, // Temporary ID
-          gmailThreadId: thread.gmailThreadId,
+          threadId: thread!.id,
+          gmailMessageId: response.data.id!,
+          gmailThreadId: response.data.threadId!,
           from: ctx.session.user.email!,
           to: input.to,
           cc: input.cc,
@@ -607,14 +731,25 @@ export const gmailRouter = createTRPCRouter({
         },
       });
 
-      // 2. Update thread's last message date and increment message count
-      await ctx.db.thread.update({
-        where: { id: thread.id },
-        data: {
-          lastMessageDate: currentDate,
-          messageCount: { increment: 1 },
-        },
-      });
+      // 5. Create attachment records for sent attachments
+      if (input.attachments.length > 0) {
+        for (const attachment of input.attachments) {
+          try {
+            await ctx.db.attachment.create({
+              data: {
+                messageId: optimisticMessage.id,
+                filename: attachment.filename,
+                mimeType: attachment.contentType,
+                size: attachment.size,
+                s3Key: attachment.s3Key,
+                gmailAttachmentId: `sent-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, // Generated ID for sent attachments
+              },
+            });
+          } catch (error) {
+            console.error(`Failed to create attachment record for ${attachment.s3Key}:`, error);
+          }
+        }
+      }
 
       // 3. Ensure SENT label exists and associate with thread
       let sentLabel = await ctx.db.label.findFirst({
@@ -640,110 +775,34 @@ export const gmailRouter = createTRPCRouter({
         where: {
           labelId_threadId: {
             labelId: sentLabel.id,
-            threadId: thread.id,
+            threadId: thread!.id,
           },
         },
         create: {
           labelId: sentLabel.id,
-          threadId: thread.id,
+          threadId: thread!.id,
         },
         update: {},
       });
 
-      try {
-        // 4. Send via Gmail API
-        const headers = [
-          `Message-ID: ${messageId}`,
-          `From: ${ctx.session.user.email}`,
-          `To: ${input.to.join(", ")}`,
-          input.cc.length > 0 ? `Cc: ${input.cc.join(", ")}` : null,
-          input.bcc.length > 0 ? `Bcc: ${input.bcc.join(", ")}` : null,
-          `Subject: ${subjectText}`,
-          lastMessage ? `In-Reply-To: <${lastMessage.gmailMessageId}>` : null,
-          references.length > 0 ? `References: ${references.join(" ")}` : null,
-          `Content-Type: text/plain; charset=utf-8`,
-          `MIME-Version: 1.0`,
-        ].filter(Boolean);
+      console.log("Message sent successfully:", {
+        messageId: response.data.id,
+        threadId: response.data.threadId,
+        isNewEmail,
+      });
 
-        const email = headers.join("\r\n") + "\r\n\r\n" + input.content;
-        const encodedMessage = Buffer.from(email, 'utf-8')
-          .toString("base64")
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, "");
-
-        const response = await gmail.users.messages.send({
-          userId: "me",
-          requestBody: {
-            raw: encodedMessage,
-            threadId: thread.gmailThreadId,
-          },
-        });
-
-        // 5. Update optimistic message with real Gmail message ID
-        await ctx.db.message.update({
-          where: { id: optimisticMessage.id },
-          data: {
-            gmailMessageId: response.data.id!,
-          },
-        });
-
-        console.log("Message sent successfully:", {
-          optimisticId: optimisticMessage.id,
-          gmailId: response.data.id,
-          threadId: response.data.threadId,
-        });
-
-        return { 
-          success: true, 
-          messageId: response.data.id,
-          optimisticMessage: {
-            id: optimisticMessage.id,
-            from: optimisticMessage.from,
-            to: optimisticMessage.to,
-            subject: optimisticMessage.subject,
-            date: optimisticMessage.date,
-            textContent: optimisticMessage.textContent,
-          }
-        };
-
-      } catch (error) {
-        // 6. ROLLBACK: Remove optimistic updates on send failure
-        console.error("Failed to send message, rolling back:", error);
-        
-        // Remove optimistic message
-        await ctx.db.message.delete({
-          where: { id: optimisticMessage.id },
-        });
-
-        // Revert thread updates
-        await ctx.db.thread.update({
-          where: { id: thread.id },
-          data: {
-            lastMessageDate: thread.lastMessageDate,
-            messageCount: { decrement: 1 },
-          },
-        });
-
-        // Remove SENT label association if this was the only sent message
-        const otherSentMessages = await ctx.db.message.findFirst({
-          where: {
-            threadId: thread.id,
-            labelIds: { has: "SENT" },
-          },
-        });
-
-        if (!otherSentMessages) {
-          await ctx.db.labelThread.deleteMany({
-            where: {
-              labelId: sentLabel.id,
-              threadId: thread.id,
-            },
-          });
+      return { 
+        success: true, 
+        messageId: response.data.id,
+        optimisticMessage: {
+          id: optimisticMessage.id,
+          from: optimisticMessage.from,
+          to: optimisticMessage.to,
+          subject: optimisticMessage.subject,
+          date: optimisticMessage.date,
+          textContent: optimisticMessage.textContent,
         }
-
-        throw error;
-      }
+      };
     }),
 
   generateAIDraft: protectedProcedure
@@ -801,6 +860,43 @@ Generate a professional, concise, and helpful reply:`;
         return {
           draft: `Thank you for your email. I'll review this and get back to you shortly.\n\nBest regards,\n${ctx.session.user.name || ctx.session.user.email}`,
         };
+      }
+    }),
+
+  uploadAttachment: protectedProcedure
+    .input(z.object({
+      filename: z.string(),
+      contentType: z.string(),
+      fileData: z.string(), // Base64 encoded file data
+      size: z.number(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        // Generate unique attachment ID
+        const attachmentId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Create S3 key for temporary attachment
+        const s3Key = S3_PATHS.DRAFT_ATTACHMENT(ctx.session.user.id, attachmentId, input.filename);
+        
+        // Convert base64 to buffer
+        const fileBuffer = Buffer.from(input.fileData, 'base64');
+        
+        // Upload to S3
+        await uploadToS3(s3Key, fileBuffer, input.contentType);
+        
+        return {
+          attachmentId,
+          s3Key,
+          filename: input.filename,
+          size: input.size,
+          contentType: input.contentType,
+        };
+      } catch (error) {
+        console.error("Failed to upload attachment:", error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to upload attachment",
+        });
       }
     }),
 });

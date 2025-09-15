@@ -61,6 +61,26 @@ export async function getFromS3(key: string): Promise<string | null> {
   }
 }
 
+export async function getFromS3AsBuffer(key: string): Promise<Buffer | null> {
+  try {
+    const params: GetObjectCommandInput = {
+      Bucket: env.S3_BUCKET_NAME,
+      Key: key,
+    };
+
+    const command = new GetObjectCommand(params);
+    const response = await s3Client.send(command);
+    
+    if (!response.Body) return null;
+    
+    const bytes = await response.Body.transformToByteArray();
+    return Buffer.from(bytes);
+  } catch (error) {
+    console.error("Error fetching from S3:", error);
+    return null;
+  }
+}
+
 export async function deleteFromS3(key: string): Promise<void> {
   const params = {
     Bucket: env.S3_BUCKET_NAME,

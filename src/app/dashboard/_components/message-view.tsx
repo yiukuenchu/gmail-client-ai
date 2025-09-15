@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { ChevronDownIcon, ChevronRightIcon, PaperclipIcon, DownloadIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, PaperclipIcon, DownloadIcon, ForwardIcon, ReplyIcon } from "lucide-react";
 import { api } from "~/trpc/react";
 import { cn } from "~/lib/utils";
 import type { Message, Attachment } from "@prisma/client";
@@ -12,9 +12,11 @@ interface MessageViewProps {
     attachments: Attachment[];
   };
   isExpanded?: boolean;
+  onForward?: (message: Message) => void;
+  onReply?: (message: Message) => void;
 }
 
-export function MessageView({ message, isExpanded: initialExpanded = false }: MessageViewProps) {
+export function MessageView({ message, isExpanded: initialExpanded = false, onForward, onReply }: MessageViewProps) {
   const [isExpanded, setIsExpanded] = useState(initialExpanded);
   const [contentLoaded, setContentLoaded] = useState(false);
   
@@ -113,6 +115,29 @@ export function MessageView({ message, isExpanded: initialExpanded = false }: Me
               </div>
             </div>
           )}
+
+          {/* Message Actions */}
+          <div className="border-t px-6 py-3">
+            <div className="flex items-center gap-2">
+              <button 
+                className="raycast-button gap-2 text-sm"
+                onClick={() => onReply?.(message)}
+              >
+                <ReplyIcon className="w-4 h-4" />
+                Reply
+              </button>
+              
+              {onForward && (
+                <button 
+                  className="raycast-button gap-2 text-sm"
+                  onClick={() => onForward(message)}
+                >
+                  <ForwardIcon className="w-4 h-4" />
+                  Forward
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
