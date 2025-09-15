@@ -5,7 +5,7 @@ import { useRef } from "react";
 import { api } from "~/trpc/react";
 import { MessageView } from "../../_components/message-view";
 import { ComposeReply, type ComposeReplyHandle } from "../../_components/compose-reply";
-import { ArrowLeftIcon, StarIcon, TrashIcon, ArchiveIcon } from "lucide-react";
+import { ArrowLeftIcon, StarIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { Message } from "@prisma/client";
 
@@ -132,20 +132,6 @@ export default function ThreadPage() {
               title={thread.starred ? "Unstar" : "Star"}
             >
               <StarIcon className="w-5 h-5" fill={thread.starred ? "currentColor" : "none"} />
-            </button>
-            
-            <button
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600"
-              title="Archive"
-            >
-              <ArchiveIcon className="w-5 h-5" />
-            </button>
-            
-            <button
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600"
-              title="Delete"
-            >
-              <TrashIcon className="w-5 h-5" />
             </button>
           </div>
         </div>

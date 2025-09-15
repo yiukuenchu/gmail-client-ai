@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 import { api } from "~/trpc/react";
 import { 
   InboxIcon, 
@@ -27,12 +28,23 @@ const defaultLabels = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [isSyncing, setIsSyncing] = useState(false);
   const { data: labels } = api.gmail.getLabels.useQuery();
   const syncMailbox = api.gmail.syncMailbox.useMutation();
   const syncBatch = api.gmail.syncBatch.useMutation();
   const { data: syncStatus } = api.gmail.getSyncStatus.useQuery();
 
   const handleSync = async () => {
+    // Prevent multiple sync attempts
+    if (isSyncing) return;
+    
+    setIsSyncing(true);
+    
+    // Timeout protection - reset isSyncing after 30 seconds
+    const timeoutId = setTimeout(() => {
+      setIsSyncing(false);
+    }, 30000);
+    
     try {
       let completed = false;
       let attempt = 0;
@@ -61,6 +73,10 @@ export function Sidebar() {
       }
     } catch (error) {
       console.error("Sync error:", error);
+    } finally {
+      // Clear timeout and reset syncing state
+      clearTimeout(timeoutId);
+      setIsSyncing(false);
     }
   };
 
@@ -86,23 +102,23 @@ export function Sidebar() {
       <div className="p-4 space-y-3">
         <button
           onClick={handleSync}
-          disabled={syncBatch.isPending || syncStatus?.currentJob?.status === "RUNNING"}
+          disabled={isSyncing || syncBatch.isPending || syncStatus?.currentJob?.status === "RUNNING"}
           className="raycast-button primary w-full gap-2"
         >
           <RefreshCwIcon className={cn(
             "w-4 h-4",
-            (syncBatch.isPending || syncStatus?.currentJob?.status === "RUNNING") && "animate-spin"
+            (isSyncing || syncBatch.isPending || syncStatus?.currentJob?.status === "RUNNING") && "animate-spin"
           )} />
           {syncStatus?.currentJob?.status === "RUNNING" 
             ? `Syncing... ${Math.round(syncStatus.currentJob.progress)}%`
-            : syncBatch.isPending 
+            : (isSyncing || syncBatch.isPending)
               ? "Syncing..."
               : "Sync Mail"
           }
         </button>
         
         <Link href="/dashboard/compose" className="block">
-          <button className="w-full px-4 py-3 rounded-lg font-medium text-white transition-all hover:shadow-md flex items-center justify-center gap-2" style={{ backgroundColor: '#ea4335' }}>
+          <button className="raycast-button w-full gap-2 font-medium" style={{ backgroundColor: '#ea4335', color: 'white' }}>
             <PenToolIcon className="w-4 h-4" />
             Compose
           </button>
